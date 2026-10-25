@@ -643,6 +643,10 @@ export function ChartMap({
   ownShip,
   headingDeg,
   aisTargets,
+  aisVisible = true,
+  radarVisible = false,
+  radarInfo = false,
+  radarArpa = false,
   reloadToken = 0,
   scheme = "day",
   onFeatureQuery,
@@ -665,6 +669,10 @@ export function ChartMap({
     cogDeg?: number;
     headingDeg?: number;
   }>;
+  aisVisible?: boolean;
+  radarVisible?: boolean;
+  radarInfo?: boolean;
+  radarArpa?: boolean;
   reloadToken?: number;
   scheme?: ChartScheme;
   onFeatureQuery?: (hit: ChartFeatureHit | null) => void;
@@ -742,8 +750,19 @@ export function ChartMap({
       const dir = (e as CustomEvent<number>).detail;
       map.zoomTo(map.getZoom() + dir, { duration: 200 });
     };
+    const onCenter = (e: Event) => {
+      const map = mapRef.current;
+      if (!map) return;
+      const d = (e as CustomEvent<{ lat: number; lon: number }>).detail;
+      if (d?.lat == null || d?.lon == null) return;
+      map.easeTo({ center: [d.lon, d.lat], duration: 450 });
+    };
     window.addEventListener("irbis:map-zoom", onZoom as EventListener);
-    return () => window.removeEventListener("irbis:map-zoom", onZoom as EventListener);
+    window.addEventListener("irbis:map-center", onCenter as EventListener);
+    return () => {
+      window.removeEventListener("irbis:map-zoom", onZoom as EventListener);
+      window.removeEventListener("irbis:map-center", onCenter as EventListener);
+    };
   }, []);
 
   useEffect(() => {
@@ -990,7 +1009,37 @@ export function ChartMap({
       type: "FeatureCollection",
       features: toAisFeatures(aisTargets),
     });
-  }, [aisTargets, scheme]);
+    for (const id of ["ais-halo", "ais-ships", "ais-labels"]) {
+      if (!map.getLayer(id)) continue;
+      map.setLayoutProperty(id, "visibility", aisVisible ? "visible" : "none");
+    }
+  }, [aisTargets, scheme, aisVisible]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !map.isStyleLoaded()) return;
+    ensureRadarLayers(map);
+    const show = radarVisible;
+    const setVis = (id: string, on: boolean) => {
+      if (!map.getLayer(id)) return;
+      map.setLayoutProperty(id, "visibility", on ? "visible" : "none");
+    };
+    setVis("radar-ring", show);
+    setVis("radar-info", show && radarInfo);
+    setVis("radar-arpa", show && radarArpa);
+    if (!ownShip) return;
+    const src = map.getSource("radar") as maplibregl.GeoJSONSource | undefined;
+    src?.setData({
+      type: "FeatureCollection",
+      features: [
+        {
+          type: "Feature",
+          properties: {},
+          geometry: { type: "Point", coordinates: [ownShip.lon, ownShip.lat] },
+        },
+      ],
+    });
+  }, [radarVisible, radarInfo, radarArpa, ownShip, scheme]);
 
   return (
     <div className={`chart-map-root scheme-${scheme}`}>
@@ -998,4 +1047,56 @@ export function ChartMap({
       <div className="chart-watermark">{error ? `Hata: ${error}` : status}</div>
     </div>
   );
+}
+
+function ensureRadarLayers(map: Map) {
+  if (!map.getSource("radar")) {
+    map.addSource("radar", {
+      type: "geojson",
+      data: { type: "FeatureCollection", features: [] },
+    });
+  }
+  if (!map.getLayer("radar-ring")) {
+    map.addLayer({
+      id: "radar-ring",
+      type: "circle",
+      source: "radar",
+      layout: { visibility: "none" },
+      paint: {
+        "circle-radius": 90,
+        "circle-color": "rgba(34, 197, 94, 0.08)",
+        "circle-stroke-width": 2,
+        "circle-stroke-color": "rgba(34, 197, 94, 0.65)",
+        "circle-pitch-alignment": "map",
+      },
+    });
+  }
+  if (!map.getLayer("radar-info")) {
+    map.addLayer({
+      id: "radar-info",
+      type: "circle",
+      source: "radar",
+      layout: { visibility: "none" },
+      paint: {
+        "circle-radius": 55,
+        "circle-color": "rgba(56, 189, 248, 0.06)",
+        "circle-stroke-width": 1.5,
+        "circle-stroke-color": "rgba(56, 189, 248, 0.7)",
+      },
+    });
+  }
+  if (!map.getLayer("radar-arpa")) {
+    map.addLayer({
+      id: "radar-arpa",
+      type: "circle",
+      source: "radar",
+      layout: { visibility: "none" },
+      paint: {
+        "circle-radius": 28,
+        "circle-color": "rgba(251, 146, 60, 0.12)",
+        "circle-stroke-width": 2,
+        "circle-stroke-color": "rgba(251, 146, 60, 0.85)",
+      },
+    });
+  }
 }
