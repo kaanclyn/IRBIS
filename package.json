@@ -1,0 +1,22 @@
+{
+  "name": "irbis",
+  "private": true,
+  "version": "0.1.0",
+  "description": "IRBIS — PC tabanlı denizcilik chartplotter (Windows)",
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "tools/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w @irbis/desktop",
+    "build": "npm run build -w @irbis/desktop",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "ruflo": "^3.60.1"
+  }
+}

@@ -1,0 +1,32 @@
+node_modules/
+dist/
+out/
+release/
+logs/
+*.log
+.DS_Store
+Thumbs.db
+.env
+.env.*
+!.env.example
+*.local
+.vite/
+coverage/
+samples/enc-noaa/**
+!samples/enc-noaa/.gitkeep
+samples/chart-bake/
+tools/tile57/**/*.zip
+tools/tile57/**/tile57-*-windows-gnu/
+
+# Local chart/vendor libs — not pushed (large / proprietary paths)
+LIB/
+
+# Local agent / IDE runtime
+.claude-flow/
+.claude/
+.cursor/
+.swarm/
+
+# Ruflo local secrets and runtime data
+.env.local
+.env.*.local
