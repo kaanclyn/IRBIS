@@ -15,7 +15,7 @@ interface ChartConfig {
   worldZoom?: number;
   s63Detected?: boolean;
   userPermitCount?: number;
-  /** When true (S-63 encrypted, no OEM), skip OpenFreeMap — dark chart void only */
+  /** When true, skip external world basemap — solid void / ENC only (offline). */
   hideWorldBasemap?: boolean;
   mapMode?: "navionics" | "s57-lab" | string;
   navionics?: {

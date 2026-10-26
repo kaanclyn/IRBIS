@@ -29,7 +29,7 @@ export function storeScheme(scheme: ChartScheme) {
   }
 }
 
-/** World basemap paints tuned so OpenFreeMap doesn't blow out dusk/night ENC. */
+/** Void / quilt backdrop paints (offline — no external basemap CDN). */
 export type WorldPalette = {
   background: string;
   water: string;

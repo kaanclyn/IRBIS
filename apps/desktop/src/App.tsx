@@ -1,14 +1,11 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { ChartMap, type ChartFeatureHit } from "./chart/ChartMap";
 import { loadStoredScheme, storeScheme, type ChartScheme } from "./chart/scheme";
-import { ChartLibraryPanel } from "./components/ChartLibraryPanel";
 import { useOwnShip } from "./hooks/useOwnShip";
 import { useAis } from "./hooks/useAis";
 import type { MobPoint } from "./nav/types";
-import wordmarkUrl from "./assets/brand/irbis-three-spheres.png";
-import emblemUrl from "./assets/brand/irbis-emblem-spheres.png";
-
-const DISCLAIMER_KEY = "irbis.disclaimer.accepted.session";
+import wordmarkDarkUrl from "./assets/brand/irbis-wordmark-dark.png";
+import wordmarkLightUrl from "./assets/brand/irbis-wordmark-light.png";
 
 function formatCoord(lat: number, lon: number): string {
   const ns = lat >= 0 ? "N" : "S";
@@ -70,15 +67,14 @@ type CtrlId =
   | "camAisLock"
   | "centerOwn"
   | "aisOn"
-  | "radarOn"
-  | "layers";
+  | "radarOn";
+
+type RadarLetter = "A" | "B";
 
 export function App() {
-  const [accepted, setAccepted] = useState(() => sessionStorage.getItem(DISCLAIMER_KEY) === "1");
   const [cursor, setCursor] = useState({ lat: 39.24, lon: -76.55, zoom: 12 });
   const [pointer, setPointer] = useState<{ lat: number; lon: number } | null>(null);
   const [now, setNow] = useState(() => new Date());
-  const [libOpen, setLibOpen] = useState(false);
   const [chartReload, setChartReload] = useState(0);
   const [activeCell, setActiveCell] = useState("");
   const [maximized, setMaximized] = useState(false);
@@ -92,7 +88,7 @@ export function App() {
   const [radarOn, setRadarOn] = useState(false);
   const [radarInfo, setRadarInfo] = useState(false);
   const [radarArpa, setRadarArpa] = useState(false);
-  const [radarSource, setRadarSource] = useState(0);
+  const [radarLetter, setRadarLetter] = useState<RadarLetter>("A");
   const [camAutoFocus, setCamAutoFocus] = useState(false);
   const [camIndex, setCamIndex] = useState(0);
   const [camVideoTrack, setCamVideoTrack] = useState(false);
@@ -129,9 +125,6 @@ export function App() {
         return;
       }
       if (cfg?.cellName) setActiveCell(cfg.cellName);
-    });
-    void window.irbis?.getChartLibrary?.().then((s) => {
-      setActiveCell((prev) => (prev === "NAVIONICS" ? prev : s?.activeCell || prev));
     });
     const unsub = window.irbis?.onChartChanged?.((payload) => {
       const p = payload as { cellName?: string };
@@ -180,11 +173,6 @@ export function App() {
     return Math.max(0.1, barM / 1852);
   }, [cursor.lat, cursor.zoom]);
 
-  const accept = () => {
-    sessionStorage.setItem(DISCLAIMER_KEY, "1");
-    setAccepted(true);
-  };
-
   const modeBadge = own.mode === "live" ? "CANLI" : "SİM";
   const modeClass = own.mode === "live" ? "live-badge" : "sim-badge";
   const propRows = featureHit ? summarizeProps(featureHit.properties) : [];
@@ -210,26 +198,26 @@ export function App() {
   const runCtrl = (id: CtrlId) => {
     switch (id) {
       case "radarSource": {
-        const next = (radarSource + 1) % 3;
-        setRadarSource(next);
-        setStatusNote(`Radar kaynağı · ${next + 1}`);
+        const next: RadarLetter = radarLetter === "A" ? "B" : "A";
+        setRadarLetter(next);
+        setStatusNote(`Radar kaynağı · ${next}`);
         break;
       }
       case "radarInfo":
         setRadarInfo((v) => {
-          setStatusNote(!v ? "Radar bilgi katmanı açık" : "Radar bilgi katmanı kapalı");
+          setStatusNote(!v ? "Radar bilgi katmanı açık" : "Radar bilgi kapalı");
           return !v;
         });
         break;
       case "radarArpa":
         setRadarArpa((v) => {
-          setStatusNote(!v ? "ARPA katmanı açık" : "ARPA katmanı kapalı");
+          setStatusNote(!v ? "ARPA katmanı açık" : "ARPA kapalı");
           return !v;
         });
         break;
       case "camAutoFocus":
         setCamAutoFocus((v) => {
-          setStatusNote(!v ? "Kamera oto focus açık" : "Kamera oto focus kapalı");
+          setStatusNote(!v ? "Oto focus açık" : "Oto focus kapalı");
           return !v;
         });
         break;
@@ -254,7 +242,7 @@ export function App() {
         setCamCursor((v) => {
           const on = !v;
           if (on) setCamAisLock(false);
-          setStatusNote(on ? "Kamera → harita imleci" : "İmleç takibi kapalı");
+          setStatusNote(on ? "Kamera → imleç" : "İmleç takibi kapalı");
           return on;
         });
         break;
@@ -262,51 +250,25 @@ export function App() {
         setCamAisLock((v) => {
           const on = !v;
           if (on) setCamCursor(false);
-          setStatusNote(on ? "Kamera AIS kilidi (hedef seç)" : "AIS kilidi kapalı");
+          setStatusNote(on ? "Kamera AIS kilidi" : "AIS kilidi kapalı");
           return on;
         });
         break;
       case "centerOwn":
         centerOwnShip();
         break;
-      case "aisOn":
-        setAisOn((v) => {
-          setStatusNote(!v ? "AIS açık" : "AIS kapalı");
-          return !v;
-        });
+      case "aisOn": {
+        const next = !aisOn;
+        setAisOn(next);
+        setStatusNote(next ? `AIS açık · ${ais.count} hedef` : "AIS kapalı");
         break;
+      }
       case "radarOn":
         setRadarOn((v) => {
-          setStatusNote(!v ? "Radar açık" : "Radar kapalı");
+          setStatusNote(!v ? `Radar ${radarLetter} açık` : "Radar kapalı");
           return !v;
         });
         break;
-      case "layers":
-        setLibOpen(true);
-        break;
-    }
-  };
-
-  const active = (id: CtrlId): boolean => {
-    switch (id) {
-      case "radarInfo":
-        return radarInfo;
-      case "radarArpa":
-        return radarArpa;
-      case "camAutoFocus":
-        return camAutoFocus;
-      case "camVideoTrack":
-        return camVideoTrack;
-      case "camCursor":
-        return camCursor;
-      case "camAisLock":
-        return camAisLock;
-      case "aisOn":
-        return aisOn;
-      case "radarOn":
-        return radarOn;
-      default:
-        return false;
     }
   };
 
@@ -316,7 +278,7 @@ export function App() {
         <div className="titlebar-left no-drag">
           <img
             className="brand-wordmark"
-            src={wordmarkUrl}
+            src={scheme === "night" ? wordmarkDarkUrl : wordmarkLightUrl}
             alt="IRBIS Marine Navigation Platform"
             draggable={false}
           />
@@ -389,7 +351,7 @@ export function App() {
             onCursorMove={onCursorMove}
             ownShip={own.position}
             headingDeg={own.state?.headingDegTrue?.value}
-            aisTargets={aisOn ? ais.targets : []}
+            aisTargets={ais.targets}
             aisVisible={aisOn}
             radarVisible={radarOn}
             radarInfo={radarInfo}
@@ -465,205 +427,229 @@ export function App() {
         </main>
 
         <aside className="side-panel side-panel-bridge" aria-label="Kontrol paneli">
-          <div className="bridge-tabs" role="tablist" aria-label="Modüller">
-            <span className="bridge-tab active" title="Sistem">
-              <CtrlGlyph kind="gauge" />
-            </span>
-            <span className="bridge-tab" title="Radar">
-              <CtrlGlyph kind="radar" />
-            </span>
-            <span className="bridge-tab" title="Kamera">
-              <CtrlGlyph kind="cam" />
-            </span>
-            <span className="bridge-tab" title="Harita">
-              <CtrlGlyph kind="map" />
-            </span>
-            <button type="button" className="side-panel-close bridge-close" aria-label="Paneli kapat" onClick={() => setPanelOpen(false)}>
+          <div className="bridge-head">
+            <div className="bridge-brand">
+              <div className="bridge-mark" aria-hidden />
+              <div>
+                <div className="bridge-kicker">Bridge</div>
+                <div className="bridge-title">Kontrol</div>
+              </div>
+            </div>
+            <button type="button" className="bridge-x" aria-label="Paneli kapat" onClick={() => setPanelOpen(false)}>
               ×
             </button>
           </div>
 
-          <div className="hub-body bridge-body">
-            <div className="bridge-meters">
-              <MeterRow label="SOG" unit="Kn" metric={own.metrics.sog} />
-              <MeterRow label="COG" unit="°T" metric={own.metrics.cog} />
-              <MeterRow label="Derinlik" unit="m" metric={own.metrics.depth} />
-              <MeterRow label="POS" value={posLabel} />
-              <MeterRow label="Pruva" unit="°" metric={own.metrics.hdg} />
+          <div className="bridge-body">
+            <div className="meter-mosaic">
+              <MeterCard label="SOG" unit="kn" metric={own.metrics.sog} />
+              <MeterCard label="COG" unit="°T" metric={own.metrics.cog} />
+              <MeterCard label="Derinlik" unit="m" metric={own.metrics.depth} />
+              <MeterCard label="Pruva" unit="°" metric={own.metrics.hdg} />
+              <MeterCard label="POS" value={posLabel} wide />
             </div>
 
             <div className="bridge-stamp">
-              <div>{pointerLabel ?? posLabel}</div>
-              <div>{formatLocalStamp(now)}</div>
+              <div className="bridge-stamp-ico" aria-hidden>
+                ⌖
+              </div>
+              <div>
+                <div className="bridge-stamp-main">{pointerLabel ?? "İmleç haritada…"}</div>
+                <div className="bridge-stamp-sub">{formatLocalStamp(now)}</div>
+              </div>
             </div>
 
-            <div className="ctrl-grid" role="toolbar" aria-label="Kontroller">
-              <CtrlBtn id="radarSource" label="Radar kaynağı değiştir" active={false} badge={String(radarSource + 1)} onClick={runCtrl}>
-                <CtrlGlyph kind="radarSrc" />
-              </CtrlBtn>
-              <CtrlBtn id="radarInfo" label="Radar bilgi katmanı" active={active("radarInfo")} onClick={runCtrl}>
-                <CtrlGlyph kind="radarInfo" />
-              </CtrlBtn>
-              <CtrlBtn id="radarArpa" label="Radar ARPA katmanı" active={active("radarArpa")} onClick={runCtrl}>
-                <CtrlGlyph kind="arpa" />
-              </CtrlBtn>
+            <section className="bridge-zone">
+              <div className="zone-head">
+                <span>
+                  <i className="zone-dot" aria-hidden />
+                  Radar
+                </span>
+                <div className="radar-ab" role="group" aria-label="Radar kaynağı">
+                  <button
+                    type="button"
+                    className={radarLetter === "A" ? "active" : ""}
+                    onClick={() => {
+                      setRadarLetter("A");
+                      setStatusNote("Radar kaynağı · A");
+                    }}
+                  >
+                    A
+                  </button>
+                  <button
+                    type="button"
+                    className={radarLetter === "B" ? "active" : ""}
+                    onClick={() => {
+                      setRadarLetter("B");
+                      setStatusNote("Radar kaynağı · B");
+                    }}
+                  >
+                    B
+                  </button>
+                </div>
+              </div>
 
-              <CtrlBtn id="camAutoFocus" label="Kamera oto focus" active={active("camAutoFocus")} onClick={runCtrl}>
-                <CtrlGlyph kind="camA" />
-              </CtrlBtn>
-              <CtrlBtn id="camSwitch" label="Aktif kamerayı değiştir" active={false} badge={String(camIndex + 1)} onClick={runCtrl}>
-                <CtrlGlyph kind="camSwitch" />
-              </CtrlBtn>
-              <CtrlBtn id="camHome" label="Kamerayı ana pozisyona çevir" active={false} onClick={runCtrl}>
-                <CtrlGlyph kind="home" />
-              </CtrlBtn>
-              <CtrlBtn id="camVideoTrack" label="Kamera video track" active={active("camVideoTrack")} onClick={runCtrl}>
-                <CtrlGlyph kind="track" />
-              </CtrlBtn>
+              <div className="bento-radar">
+                <button
+                  type="button"
+                  className={`power-orb${radarOn ? " on" : ""}`}
+                  title="Radar aç"
+                  aria-pressed={radarOn}
+                  onClick={() => runCtrl("radarOn")}
+                >
+                  <CtrlGlyph kind="radarSweep" />
+                  <span>{radarOn ? `Radar ${radarLetter}` : "Radar"}</span>
+                </button>
+                <div className="bento-stack">
+                  <ChipBtn id="radarInfo" label="Bilgi" active={radarInfo} onClick={runCtrl}>
+                    <CtrlGlyph kind="radarInfo" />
+                  </ChipBtn>
+                  <ChipBtn id="radarArpa" label="ARPA" active={radarArpa} onClick={runCtrl}>
+                    <CtrlGlyph kind="arpa" />
+                  </ChipBtn>
+                </div>
+              </div>
+            </section>
 
-              <CtrlBtn id="camCursor" label="Kamerayı haritada imleçe çevir" active={active("camCursor")} onClick={runCtrl}>
-                <CtrlGlyph kind="cursor" />
-              </CtrlBtn>
-              <CtrlBtn id="camAisLock" label="Kamerayı seçtiğim AIS'e kilitle" active={active("camAisLock")} onClick={runCtrl}>
-                <CtrlGlyph kind="lock" />
-              </CtrlBtn>
-              <CtrlBtn id="centerOwn" label="Teknemi merkeze al" active={false} onClick={runCtrl}>
-                <CtrlGlyph kind="ship" />
-              </CtrlBtn>
-              <CtrlBtn id="aisOn" label="AIS aç" active={active("aisOn")} onClick={runCtrl}>
-                <CtrlGlyph kind="ais" />
-              </CtrlBtn>
+            <section className="bridge-zone">
+              <div className="zone-head">
+                <span>
+                  <i className="zone-dot cam" aria-hidden />
+                  Kamera
+                </span>
+                <em>CAM {camIndex + 1}</em>
+              </div>
+              <div className="chip-rail">
+                <ChipBtn id="camAutoFocus" label="Focus" active={camAutoFocus} onClick={runCtrl}>
+                  <CtrlGlyph kind="camA" />
+                </ChipBtn>
+                <ChipBtn id="camSwitch" label="Değiştir" active={false} onClick={runCtrl}>
+                  <CtrlGlyph kind="camSwitch" />
+                </ChipBtn>
+                <ChipBtn id="camHome" label="Ana" active={false} onClick={runCtrl}>
+                  <CtrlGlyph kind="home" />
+                </ChipBtn>
+                <ChipBtn id="camVideoTrack" label="Track" active={camVideoTrack} onClick={runCtrl}>
+                  <CtrlGlyph kind="track" />
+                </ChipBtn>
+                <ChipBtn id="camCursor" label="İmleç" active={camCursor} onClick={runCtrl}>
+                  <CtrlGlyph kind="cursor" />
+                </ChipBtn>
+                <ChipBtn id="camAisLock" label="AIS kilit" active={camAisLock} onClick={runCtrl}>
+                  <CtrlGlyph kind="lock" />
+                </ChipBtn>
+              </div>
+            </section>
 
-              <CtrlBtn id="radarOn" label="Radar aç" active={active("radarOn")} onClick={runCtrl}>
-                <CtrlGlyph kind="radarOn" />
-              </CtrlBtn>
-              <CtrlBtn id="layers" label="Katmanları göster" active={false} onClick={runCtrl}>
-                <CtrlGlyph kind="layers" />
-              </CtrlBtn>
-            </div>
+            <section className="bridge-zone">
+              <div className="zone-head">
+                <span>
+                  <i className="zone-dot nav" aria-hidden />
+                  Seyir
+                </span>
+              </div>
+              <div className="bento-nav bento-nav-2">
+                <button type="button" className="hero-center" title="Teknemi merkeze al" onClick={() => runCtrl("centerOwn")}>
+                  <span className="hero-ico">
+                    <CtrlGlyph kind="ship" />
+                  </span>
+                  <div>
+                    <strong>Merkeze al</strong>
+                    <small>OwnShip</small>
+                  </div>
+                </button>
+                <ChipBtn id="aisOn" label={aisOn ? "AIS açık" : "AIS kapalı"} active={aisOn} onClick={runCtrl} tall>
+                  <CtrlGlyph kind="ais" />
+                </ChipBtn>
+              </div>
+            </section>
 
             <div className="bridge-footer">
-              <button type="button" className={`tool-btn${mob ? " active" : ""}`} title="MOB" aria-label="MOB" onClick={dropMob}>
+              <button type="button" className={`ghost-btn${mob ? " danger" : ""}`} title="MOB" onClick={dropMob}>
                 <CtrlGlyph kind="mob" />
+                <span>MOB</span>
               </button>
               <button
                 type="button"
-                className="tool-btn"
+                className="ghost-btn"
                 title="Gündüz / gece"
-                aria-label="Şema"
                 onClick={() => onScheme(scheme === "day" ? "night" : "day")}
               >
                 <CtrlGlyph kind="daynight" />
+                <span>{scheme === "night" ? "Gece" : "Gündüz"}</span>
               </button>
-              <button type="button" className="tool-btn" title="Çıkış" aria-label="Kapat" onClick={() => void window.irbis?.windowClose?.()}>
+              <button type="button" className="ghost-btn" title="Kapat" onClick={() => void window.irbis?.windowClose?.()}>
                 <CtrlGlyph kind="exit" />
+                <span>Çık</span>
               </button>
             </div>
 
-            <div className="link-status bridge-link">
-              <span className="link-status-pill">
-                <span className={`link-dot${own.mode === "live" ? " live" : " sim"}`} />
-                NMEA UDP
-                <code>:{own.udpPort}</code>
-              </span>
+            <div className="bridge-link">
+              <span className={`link-dot${own.mode === "live" ? " live" : " sim"}`} />
+              <span>NMEA UDP</span>
+              <code>:{own.udpPort}</code>
             </div>
           </div>
         </aside>
       </div>
 
-      <ChartLibraryPanel
-        open={libOpen}
-        onClose={() => setLibOpen(false)}
-        scheme={scheme}
-        onSchemeChange={onScheme}
-        onActivated={() => {
-          setChartReload((n) => n + 1);
-          void window.irbis?.getChartLibrary?.().then((s) => {
-            if (s?.activeCell) setActiveCell(s.activeCell);
-          });
-        }}
-      />
-
-      {!accepted && (
-        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="disclaimer-title">
-          <div className="modal-card">
-            <img className="disclaimer-emblem" src={emblemUrl} alt="" aria-hidden />
-            <h1 id="disclaimer-title">Seyir uyarısı</h1>
-            <p>
-              IRBIS bir seyir yardımcısıdır; resmî haritaların, yayınların ve gemide bulunması zorunlu seyir
-              donanımının yerini tutmaz.
-            </p>
-            <p>
-              Harita, konum, derinlik, AIS ve alarm bilgileri gecikmeli, eksik veya hatalı olabilir. Gözcülük
-              (COLREG Kural 5) ve tüm kararlar kaptanın sorumluluğundadır.
-            </p>
-            <p>
-              Bu sürüm tip onaylı ECDIS değildir. NMEA UDP varsayılan port <strong>10110</strong> — veri yoksa
-              simülasyon çalışır.
-            </p>
-            <div className="actions">
-              <button type="button" onClick={accept}>
-                Okudum, kabul ediyorum
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
 
-function MeterRow({
+function MeterCard({
   label,
   unit,
   metric,
   value,
+  wide,
 }: {
   label: string;
   unit?: string;
   metric?: { value: string; unit?: string; stale: boolean; missing: boolean };
   value?: string;
+  wide?: boolean;
 }) {
   const stale = metric ? metric.stale || metric.missing : false;
   const shown = value ?? metric?.value ?? "---";
   const unitTxt = unit ?? metric?.unit ?? "";
   return (
-    <div className={`meter-row${stale ? " stale" : ""}`}>
-      <div className="meter-row-head">
+    <div className={`meter-card${wide ? " wide" : ""}${stale ? " stale" : ""}`}>
+      <div className="meter-card-top">
         <span>{label}</span>
-        {unitTxt ? <span className="meter-row-unit">{unitTxt}</span> : null}
+        {unitTxt ? <span className="meter-card-unit">{unitTxt}</span> : null}
       </div>
-      <div className="meter-row-value">{shown}</div>
+      <div className="meter-card-val">{shown}</div>
     </div>
   );
 }
 
-function CtrlBtn({
+function ChipBtn({
   id,
   label,
   active,
-  badge,
   onClick,
   children,
+  tall,
 }: {
   id: CtrlId;
   label: string;
   active: boolean;
-  badge?: string;
   onClick: (id: CtrlId) => void;
   children: ReactNode;
+  tall?: boolean;
 }) {
   return (
     <button
       type="button"
-      className={`ctrl-btn${active ? " active" : ""}`}
+      className={`chip-btn${active ? " active" : ""}${tall ? " tall" : ""}`}
       title={label}
       aria-label={label}
       aria-pressed={active}
       onClick={() => onClick(id)}
     >
-      {children}
-      {badge ? <span className="ctrl-badge">{badge}</span> : null}
+      <span className="chip-ico">{children}</span>
+      <span className="chip-lbl">{label}</span>
     </button>
   );
 }
@@ -672,11 +658,7 @@ function CtrlGlyph({
   kind,
 }: {
   kind:
-    | "gauge"
-    | "radar"
-    | "cam"
-    | "map"
-    | "radarSrc"
+    | "radarSweep"
     | "radarInfo"
     | "arpa"
     | "camA"
@@ -687,8 +669,6 @@ function CtrlGlyph({
     | "lock"
     | "ship"
     | "ais"
-    | "radarOn"
-    | "layers"
     | "mob"
     | "daynight"
     | "exit";
@@ -699,138 +679,119 @@ function CtrlGlyph({
     viewBox: "0 0 24 24",
     fill: "none",
     stroke: "currentColor",
-    strokeWidth: 1.7,
+    strokeWidth: 1.65,
+    strokeLinecap: "round" as const,
+    strokeLinejoin: "round" as const,
     "aria-hidden": true as const,
   };
   switch (kind) {
-    case "gauge":
+    case "radarSweep":
       return (
-        <svg {...common}>
-          <path d="M4 14a8 8 0 1116 0" />
-          <path d="M12 14l4-5" />
-          <circle cx="12" cy="14" r="1.5" fill="currentColor" stroke="none" />
-        </svg>
-      );
-    case "radar":
-    case "radarOn":
-      return (
-        <svg {...common}>
-          <circle cx="12" cy="12" r="8" />
-          <circle cx="12" cy="12" r="4" />
-          <path d="M12 12l6-4" />
-        </svg>
-      );
-    case "radarSrc":
-      return (
-        <svg {...common}>
-          <circle cx="12" cy="12" r="7" />
-          <path d="M12 5v7l5 3" />
-          <text x="16" y="10" fontSize="7" fill="currentColor" stroke="none" fontWeight="700">
-            A
-          </text>
+        <svg {...common} width={28} height={28}>
+          <circle cx="12" cy="12" r="9" opacity="0.35" />
+          <circle cx="12" cy="12" r="5.5" opacity="0.55" />
+          <circle cx="12" cy="12" r="2" fill="currentColor" stroke="none" />
+          <path d="M12 12l7-5" strokeWidth="2.2" />
+          <path d="M12 3a9 9 0 018.5 6" opacity="0.7" />
         </svg>
       );
     case "radarInfo":
       return (
         <svg {...common}>
-          <circle cx="12" cy="12" r="8" />
-          <path d="M12 10v5M12 7.5h.01" strokeWidth="2" />
+          <circle cx="12" cy="12" r="9" />
+          <path d="M12 10.5v5" strokeWidth="2" />
+          <circle cx="12" cy="7.5" r="1.1" fill="currentColor" stroke="none" />
         </svg>
       );
     case "arpa":
       return (
         <svg {...common}>
-          <circle cx="12" cy="12" r="3" />
-          <path d="M12 3v3M12 18v3M3 12h3M18 12h3" />
-          <text x="15" y="9" fontSize="5.5" fill="currentColor" stroke="none" fontWeight="700">
-            ARPA
-          </text>
-        </svg>
-      );
-    case "cam":
-    case "camSwitch":
-      return (
-        <svg {...common}>
-          <rect x="3" y="7" width="14" height="11" rx="2" />
-          <path d="M17 10l4-2v9l-4-2z" />
+          <circle cx="12" cy="12" r="3.2" />
+          <path d="M12 2.8v3.2M12 18v3.2M2.8 12h3.2M18 12h3.2" />
+          <path d="M5.2 5.2l2.2 2.2M16.6 16.6l2.2 2.2M18.8 5.2l-2.2 2.2M7.4 16.6l-2.2 2.2" opacity="0.7" />
         </svg>
       );
     case "camA":
       return (
         <svg {...common}>
-          <rect x="3" y="7" width="14" height="11" rx="2" />
-          <path d="M17 10l4-2v9l-4-2z" />
-          <text x="7.5" y="15" fontSize="8" fill="currentColor" stroke="none" fontWeight="700">
-            A
-          </text>
+          <rect x="2.5" y="6.5" width="13.5" height="11" rx="2.2" />
+          <path d="M16 9.2l5-2.4v10.4l-5-2.4z" />
+          <path d="M7.2 15.2l1.8-5.2 1.8 5.2M7.7 13.6h2.8" strokeWidth="1.5" />
+        </svg>
+      );
+    case "camSwitch":
+      return (
+        <svg {...common}>
+          <rect x="2.5" y="7" width="12.5" height="10" rx="2" />
+          <path d="M15 9.5l5.5-2.6v10.2L15 14.5z" />
+          <path d="M6 4.5h5M8.5 3v3" />
         </svg>
       );
     case "home":
       return (
         <svg {...common}>
-          <path d="M4 11l8-7 8 7" />
-          <path d="M6 10v9h12v-9" />
+          <path d="M4 11.2 12 4.5l8 6.7" />
+          <path d="M6.5 10.5V19h11v-8.5" />
+          <path d="M10 19v-5h4v5" />
         </svg>
       );
     case "track":
       return (
         <svg {...common}>
-          <path d="M4 12a8 8 0 1014.5-4.5" />
-          <path d="M18.5 4v4h-4" />
+          <path d="M4.5 12a7.5 7.5 0 1013.2-5" />
+          <path d="M17.8 3.8v4.2h-4.2" />
+          <circle cx="12" cy="12" r="2" fill="currentColor" stroke="none" />
         </svg>
       );
     case "cursor":
       return (
         <svg {...common}>
-          <path d="M5 4l6 16 2-6 6-2z" />
+          <path d="M5 3.8 11.8 20l2.1-6.1L20 11.8z" />
+          <path d="M13.5 13.5l4.8 6.2" />
         </svg>
       );
     case "lock":
       return (
         <svg {...common}>
-          <rect x="6" y="11" width="12" height="9" rx="1.5" />
-          <path d="M8 11V8a4 4 0 018 0v3" />
+          <rect x="5.5" y="11" width="13" height="9.5" rx="2" />
+          <path d="M8 11V8.2a4 4 0 018 0V11" />
+          <circle cx="12" cy="15.5" r="1.2" fill="currentColor" stroke="none" />
         </svg>
       );
     case "ship":
       return (
-        <svg {...common}>
-          <path d="M12 3l5 14-5-3-5 3z" />
+        <svg {...common} width={26} height={26}>
+          <path d="M12 2.8 17.8 18.5 12 15.2 6.2 18.5z" fill="currentColor" fillOpacity="0.15" />
+          <path d="M12 2.8 17.8 18.5 12 15.2 6.2 18.5z" />
+          <path d="M8 20.5h8" />
         </svg>
       );
     case "ais":
       return (
         <svg {...common}>
-          <path d="M12 4l4 12-4-2.5L8 16z" />
-          <path d="M7 19h10" />
-        </svg>
-      );
-    case "map":
-    case "layers":
-      return (
-        <svg {...common}>
-          <path d="M12 3l9 5-9 5-9-5 9-5z" />
-          <path d="M3 12l9 5 9-5M3 16l9 5 9-5" />
+          <path d="M12 3.5 16.5 17l-4.5-2.8L7.5 17z" />
+          <path d="M5.5 20.2h13" />
+          <path d="M9 8.5h6" opacity="0.5" />
         </svg>
       );
     case "mob":
       return (
         <svg {...common}>
           <circle cx="12" cy="7" r="3" />
-          <path d="M6 21v-2a4 4 0 014-4h4a4 4 0 014 4v2" />
+          <path d="M6.2 20.5v-1.8a4.3 4.3 0 014.3-4.3h3a4.3 4.3 0 014.3 4.3v1.8" />
         </svg>
       );
     case "daynight":
       return (
         <svg {...common}>
-          <path d="M12 3a9 9 0 100 18 7 7 0 010-14" />
+          <path d="M12 3.2a8.8 8.8 0 100 17.6 6.8 6.8 0 010-13.6" />
         </svg>
       );
     case "exit":
       return (
         <svg {...common}>
-          <path d="M10 5H6a2 2 0 00-2 2v10a2 2 0 002 2h4" />
-          <path d="M14 12H22M18 8l4 4-4 4" />
+          <path d="M10 4.5H6.2A2.2 2.2 0 004 6.7v10.6a2.2 2.2 0 002.2 2.2H10" />
+          <path d="M13.5 12H21M17.5 8.2 21.2 12l-3.7 3.8" />
         </svg>
       );
   }

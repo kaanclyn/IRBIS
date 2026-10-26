@@ -76,21 +76,6 @@ function ensurePmtilesProtocol() {
   protocolRegistered = true;
 }
 
-/** Free Natural Earth world (OpenFreeMap) — Njord-like land/water context, no API key. */
-const WORLD_NE = {
-  type: "raster" as const,
-  tiles: ["https://tiles.openfreemap.org/natural_earth/ne2sr/{z}/{x}/{y}.png"],
-  tileSize: 256,
-  maxzoom: 6,
-  attribution: "© OpenFreeMap · Natural Earth",
-};
-
-const WORLD_OMT = {
-  type: "vector" as const,
-  url: "https://tiles.openfreemap.org/planet",
-  attribution: "© OpenMapTiles © OpenStreetMap contributors",
-};
-
 function coverageFeatureCollection(cells: NonNullable<ChartConfig["readyCells"]>) {
   return {
     type: "FeatureCollection" as const,
@@ -133,7 +118,8 @@ function cloneChartLayers(
     });
 }
 
-function worldLayersForScheme(scheme: ChartScheme): LayerSpecification[] {
+/** Offline void / S-57 quilt backdrop — no external basemap (OpenFreeMap removed). */
+function voidLayersForScheme(scheme: ChartScheme): LayerSpecification[] {
   const p = WORLD_PALETTES[scheme];
   return [
     {
@@ -141,65 +127,12 @@ function worldLayersForScheme(scheme: ChartScheme): LayerSpecification[] {
       type: "background",
       paint: { "background-color": p.background },
     },
-    {
-      id: "world-ne",
-      type: "raster",
-      source: "world_ne",
-      maxzoom: 7,
-      paint: {
-        "raster-opacity": p.rasterOpacity,
-        "raster-fade-duration": 0,
-        "raster-brightness-min": p.rasterBrightnessMin,
-        "raster-brightness-max": p.rasterBrightnessMax,
-        "raster-contrast": p.rasterContrast,
-        "raster-saturation": p.rasterSaturation,
-      },
-    },
-    {
-      id: "world-water",
-      type: "fill",
-      source: "world_omt",
-      "source-layer": "water",
-      paint: { "fill-color": p.water },
-    },
-    {
-      id: "world-landcover",
-      type: "fill",
-      source: "world_omt",
-      "source-layer": "landcover",
-      paint: {
-        "fill-color": [
-          "match",
-          ["get", "class"],
-          "wood",
-          p.landWood,
-          "grass",
-          p.landGrass,
-          "sand",
-          p.landSand,
-          "ice",
-          p.landIce,
-          p.landDefault,
-        ],
-        "fill-opacity": scheme === "day" ? 0.55 : scheme === "dusk" ? 0.7 : 0.85,
-      },
-    },
-    {
-      id: "world-landuse",
-      type: "fill",
-      source: "world_omt",
-      "source-layer": "landuse",
-      filter: ["==", ["get", "class"], "residential"],
-      paint: {
-        "fill-color": p.residential,
-        "fill-opacity": scheme === "day" ? 0.35 : 0.5,
-      },
-    },
   ];
 }
 
 function coverageLayersForScheme(scheme: ChartScheme): LayerSpecification[] {
   const p = WORLD_PALETTES[scheme];
+  // No text labels here — remote glyphs removed; cell names via status / future local fonts.
   return [
     {
       id: "enc-coverage-fill",
@@ -221,25 +154,29 @@ function coverageLayersForScheme(scheme: ChartScheme): LayerSpecification[] {
         "line-opacity": 0.9,
       },
     },
-    {
-      id: "enc-coverage-label",
-      type: "symbol",
-      source: "enc_coverage",
-      minzoom: 5,
-      maxzoom: 11,
-      layout: {
-        "text-field": ["get", "name"],
-        "text-size": 11,
-        "text-font": ["Noto Sans Regular"],
-        "text-optional": true,
-      },
-      paint: {
-        "text-color": p.coverageLabel,
-        "text-halo-color": p.coverageHalo,
-        "text-halo-width": 1.2,
-      },
-    },
   ];
+}
+
+/** Drop symbol text that needs online glyph PBFs; keep icon-only symbols for offline Navionics / future S-63. */
+function stripRemoteTextLayers(layers: LayerSpecification[]): LayerSpecification[] {
+  return layers.filter((l) => {
+    if (l.type !== "symbol") return true;
+    const layout = (l as { layout?: Record<string, unknown> }).layout;
+    const hasText = layout && "text-field" in layout && layout["text-field"] != null;
+    const hasIcon = layout && "icon-image" in layout && layout["icon-image"] != null;
+    if (hasText && !hasIcon) return false;
+    if (hasText && hasIcon && layout) {
+      delete layout["text-field"];
+      delete layout["text-font"];
+      delete layout["text-size"];
+      delete layout["text-offset"];
+      delete layout["text-anchor"];
+      delete layout["text-optional"];
+      delete layout["text-max-width"];
+      delete layout["text-allow-overlap"];
+    }
+    return true;
+  });
 }
 
 async function buildStyle(cfg: ChartConfig, scheme: ChartScheme): Promise<{
@@ -281,17 +218,10 @@ async function buildStyle(cfg: ChartConfig, scheme: ChartScheme): Promise<{
   }
 
   const useNavionics = cfg.mapMode === "navionics" && !!cfg.navionics?.tileUrl;
-  // Under Navionics: skip OpenFreeMap. Under S-57 lab: keep world basemap.
-  const hideWorld = useNavionics || (!!cfg.hideWorldBasemap && ready.length > 0);
   const p = WORLD_PALETTES[scheme];
 
+  // Primary: offline Navionics. Fallback: solid void + optional S-57 quilt (S-63 path later).
   style.sources = {
-    ...(hideWorld
-      ? {}
-      : {
-          world_ne: WORLD_NE,
-          world_omt: WORLD_OMT,
-        }),
     ...(useNavionics
       ? {
           navionics: {
@@ -321,10 +251,13 @@ async function buildStyle(cfg: ChartConfig, scheme: ChartScheme): Promise<{
     ...chartSources,
   };
   style.sprite = `${cfg.baseUrl}/${cfg.spritePath}`;
-  style.glyphs = "https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf";
+  // No remote glyph CDN — offline only. ENC text layers stripped until local fonts ship with S-63/S-57 bake.
+  delete (style as { glyphs?: string }).glyphs;
 
-  const chartLayerTemplate = (style.layers || []).filter(
-    (l) => "source" in l && (l as { source?: string }).source === "chart",
+  const chartLayerTemplate = stripRemoteTextLayers(
+    (style.layers || []).filter(
+      (l) => "source" in l && (l as { source?: string }).source === "chart",
+    ),
   );
 
   const encLayers = ready.flatMap((cell) =>
@@ -363,9 +296,7 @@ async function buildStyle(cfg: ChartConfig, scheme: ChartScheme): Promise<{
             ]
           : []),
       ]
-    : hideWorld
-      ? [voidBg]
-      : worldLayersForScheme(scheme);
+    : voidLayersForScheme(scheme);
 
   style.layers = [...navLayers, ...coverageLayersForScheme(scheme), ...encLayers];
   return { style, styleMeta: { path, remapped } };
@@ -468,11 +399,17 @@ function ensureAisIcons(map: Map) {
   }
 }
 
-function ensureAisLayers(map: Map, scheme: ChartScheme = "day") {
-  const label = scheme === "night" ? "#cbd5e1" : "#f8fafc";
-  const halo = scheme === "day" ? "rgba(6,16,24,0.92)" : "rgba(0,0,0,0.9)";
-
+function ensureAisLayers(map: Map, _scheme: ChartScheme = "day") {
   ensureAisIcons(map);
+
+  // Drop legacy online-glyph label layer if a prior session added it.
+  if (map.getLayer("ais-labels")) {
+    try {
+      map.removeLayer("ais-labels");
+    } catch {
+      /* ignore */
+    }
+  }
 
   if (!map.getSource("ais")) {
     map.addSource("ais", {
@@ -530,32 +467,8 @@ function ensureAisLayers(map: Map, scheme: ChartScheme = "day") {
         "icon-ignore-placement": true,
       },
     });
-    map.addLayer({
-      id: "ais-labels",
-      type: "symbol",
-      source: "ais",
-      layout: {
-        "text-field": ["get", "label"],
-        "text-size": 12,
-        "text-offset": [0, 1.85],
-        "text-anchor": "top",
-        "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],
-        "text-optional": true,
-        "text-allow-overlap": false,
-        "text-max-width": 10,
-      },
-      paint: {
-        "text-color": label,
-        "text-halo-color": halo,
-        "text-halo-width": 1.6,
-      },
-    });
+    // AIS names: click popup only (no remote glyph CDN).
     return;
-  }
-
-  if (map.getLayer("ais-labels")) {
-    map.setPaintProperty("ais-labels", "text-color", label);
-    map.setPaintProperty("ais-labels", "text-halo-color", halo);
   }
 }
 
@@ -690,6 +603,7 @@ export function ChartMap({
   const ownShipRef = useRef(ownShip);
   const headingRef = useRef(headingDeg);
   const aisRef = useRef(aisTargets);
+  const aisVisibleRef = useRef(aisVisible);
   const aisPopupRef = useRef<maplibregl.Popup | null>(null);
   const [status, setStatus] = useState("Harita yükleniyor…");
   const [error, setError] = useState<string | null>(null);
@@ -716,7 +630,32 @@ export function ChartMap({
     ownShipRef.current = ownShip;
     headingRef.current = headingDeg;
     aisRef.current = aisTargets;
-  }, [ownShip, headingDeg, aisTargets]);
+    aisVisibleRef.current = aisVisible;
+  }, [ownShip, headingDeg, aisTargets, aisVisible]);
+
+  function syncAisToMap(map: Map, targets: typeof aisTargets, visible: boolean) {
+    ensureAisIcons(map);
+    ensureAisLayers(map, schemeRef.current);
+    const src = map.getSource("ais") as maplibregl.GeoJSONSource | undefined;
+    const features = visible ? toAisFeatures(targets) : [];
+    try {
+      src?.setData({ type: "FeatureCollection", features });
+    } catch (err) {
+      console.warn("[irbis ais] setData", err);
+    }
+    for (const id of ["ais-halo", "ais-ships"]) {
+      if (!map.getLayer(id)) continue;
+      try {
+        map.setLayoutProperty(id, "visibility", visible ? "visible" : "none");
+      } catch (err) {
+        console.warn("[irbis ais] visibility", id, err);
+      }
+    }
+    if (!visible) {
+      aisPopupRef.current?.remove();
+      aisPopupRef.current = null;
+    }
+  }
 
   function pushOverlays(map: Map, s: ChartScheme) {
     ensureOwnShipIcon(map);
@@ -736,11 +675,7 @@ export function ChartMap({
         ],
       });
     }
-    const aisSrc = map.getSource("ais") as maplibregl.GeoJSONSource | undefined;
-    aisSrc?.setData({
-      type: "FeatureCollection",
-      features: toAisFeatures(aisRef.current),
-    });
+    syncAisToMap(map, aisRef.current, aisVisibleRef.current);
   }
 
   useEffect(() => {
@@ -826,7 +761,7 @@ export function ChartMap({
               setStatus(cfg.warning);
             } else if (useWorld && !saved) {
               setStatus(
-                `S-57 · ${n} hücre · ${schemeRef.current}${remapNote} · dünya (OpenFreeMap + tile57)`,
+                `S-57 lab · ${n} hücre · ${schemeRef.current}${remapNote} · offline void`,
               );
             } else {
               setStatus(`S-57 · ${cfg.cellName} · ${n} hücre · ${schemeRef.current}${remapNote}`);
@@ -1002,17 +937,25 @@ export function ChartMap({
 
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !map.isStyleLoaded()) return;
-    ensureAisLayers(map, scheme);
-    const src = map.getSource("ais") as maplibregl.GeoJSONSource | undefined;
-    src?.setData({
-      type: "FeatureCollection",
-      features: toAisFeatures(aisTargets),
-    });
-    for (const id of ["ais-halo", "ais-ships", "ais-labels"]) {
-      if (!map.getLayer(id)) continue;
-      map.setLayoutProperty(id, "visibility", aisVisible ? "visible" : "none");
-    }
+    if (!map) return;
+
+    const run = () => {
+      const live = mapRef.current;
+      if (!live) return false;
+      if (!live.isStyleLoaded()) return false;
+      syncAisToMap(live, aisTargets, aisVisible);
+      return true;
+    };
+
+    if (run()) return;
+
+    // Style may still be loading (Navionics / scheme switch) — retry until applied.
+    let tries = 0;
+    const id = window.setInterval(() => {
+      tries += 1;
+      if (run() || tries > 40) window.clearInterval(id);
+    }, 100);
+    return () => window.clearInterval(id);
   }, [aisTargets, scheme, aisVisible]);
 
   useEffect(() => {
