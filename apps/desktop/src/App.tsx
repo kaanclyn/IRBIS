@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { ChartMap, type ChartFeatureHit } from "./chart/ChartMap";
-import { loadStoredScheme, storeScheme, type ChartScheme } from "./chart/scheme";
+import { storeScheme, type ChartScheme } from "./chart/scheme";
 import { useOwnShip } from "./hooks/useOwnShip";
 import { useAis } from "./hooks/useAis";
 import type { MobPoint } from "./nav/types";
-import wordmarkDarkUrl from "./assets/brand/irbis-wordmark-dark.png";
-import wordmarkLightUrl from "./assets/brand/irbis-wordmark-light.png";
+import emblemUrl from "./assets/brand/irbis-emblem-mark.png";
 
 function formatCoord(lat: number, lon: number): string {
   const ns = lat >= 0 ? "N" : "S";
@@ -17,13 +16,6 @@ function formatCoord(lat: number, lon: number): string {
   const latMin = ((absLat - latDeg) * 60).toFixed(3);
   const lonMin = ((absLon - lonDeg) * 60).toFixed(3);
   return `${ns} ${latDeg}°${latMin}' ${ew} ${lonDeg}°${lonMin}'`;
-}
-
-function formatUtc(d: Date): string {
-  const hh = String(d.getUTCHours()).padStart(2, "0");
-  const mm = String(d.getUTCMinutes()).padStart(2, "0");
-  const ss = String(d.getUTCSeconds()).padStart(2, "0");
-  return `${hh}:${mm}:${ss} UTC`;
 }
 
 function formatLocalStamp(d: Date): string {
@@ -70,19 +62,28 @@ type CtrlId =
   | "radarOn";
 
 type RadarLetter = "A" | "B";
+type MainFocus = "map" | "camera";
+type PtzDir = "up" | "down" | "left" | "right" | "home" | "zoomin" | "zoomout";
+
+const CARDINAL = (deg: number): string => {
+  const d = ((deg % 360) + 360) % 360;
+  const labels = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+  return labels[Math.round(d / 45) % 8]!;
+};
 
 export function App() {
   const [cursor, setCursor] = useState({ lat: 39.24, lon: -76.55, zoom: 12 });
   const [pointer, setPointer] = useState<{ lat: number; lon: number } | null>(null);
   const [now, setNow] = useState(() => new Date());
   const [chartReload, setChartReload] = useState(0);
-  const [activeCell, setActiveCell] = useState("");
   const [maximized, setMaximized] = useState(false);
-  const [panelOpen, setPanelOpen] = useState(true);
-  const [scheme, setScheme] = useState<ChartScheme>(() => loadStoredScheme());
+  const [panelOpen] = useState(false);
+  const [scheme, setScheme] = useState<ChartScheme>("night");
   const [featureHit, setFeatureHit] = useState<ChartFeatureHit | null>(null);
   const [mob, setMob] = useState<MobPoint | null>(null);
   const [statusNote, setStatusNote] = useState<string | null>(null);
+  const [mainFocus, setMainFocus] = useState<MainFocus>("map");
+  const [camZoom, setCamZoom] = useState(1);
 
   const [aisOn, setAisOn] = useState(true);
   const [radarOn, setRadarOn] = useState(false);
@@ -119,53 +120,39 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    void window.irbis?.getChartConfig?.().then((cfg) => {
-      if (cfg?.mapMode === "navionics" || cfg?.cellName === "NAVIONICS") {
-        setActiveCell("NAVIONICS");
-        return;
-      }
-      if (cfg?.cellName) setActiveCell(cfg.cellName);
-    });
-    const unsub = window.irbis?.onChartChanged?.((payload) => {
-      const p = payload as { cellName?: string };
-      if (p?.cellName) setActiveCell(p.cellName);
+    const unsub = window.irbis?.onChartChanged?.(() => {
       setChartReload((n) => n + 1);
     });
     return () => unsub?.();
   }, []);
 
+  useEffect(() => {
+    setScheme("night");
+    storeScheme("night");
+    document.documentElement.dataset.scheme = "night";
+    document.documentElement.dataset.ui = "dark";
+  }, []);
+
   const onMove = useCallback((info: { lat: number; lon: number; zoom: number }) => {
-    setCursor(info);
+    setCursor({ lat: info.lat, lon: info.lon, zoom: info.zoom });
   }, []);
 
   const onCursorMove = useCallback((info: { lat: number; lon: number } | null) => {
-    setPointer(info);
+    if (!info) {
+      setPointer(null);
+      return;
+    }
+    setPointer({ lat: info.lat, lon: info.lon });
   }, []);
-
-  const onScheme = useCallback((s: ChartScheme) => {
-    setScheme(s);
-    storeScheme(s);
-    document.documentElement.dataset.scheme = s;
-  }, []);
-
-  useEffect(() => {
-    document.documentElement.dataset.scheme = scheme;
-    document.documentElement.dataset.ui = scheme === "night" ? "dark" : "light";
-  }, [scheme]);
 
   const onFeatureQuery = useCallback((hit: ChartFeatureHit | null) => {
     setFeatureHit(hit);
   }, []);
 
-  const posLabel = useMemo(() => {
-    if (own.position) return formatCoord(own.position.lat, own.position.lon);
-    return formatCoord(cursor.lat, cursor.lon);
-  }, [own.position, cursor.lat, cursor.lon]);
-
-  const pointerLabel = useMemo(() => {
-    if (!pointer) return null;
-    return formatCoord(pointer.lat, pointer.lon);
-  }, [pointer]);
+  const posLabel = own.position ? formatCoord(own.position.lat, own.position.lon) : "—";
+  const pointerLabel = pointer ? formatCoord(pointer.lat, pointer.lon) : null;
+  const headingNum = own.state?.headingDegTrue?.value ?? own.state?.headingDegMagnetic?.value ?? null;
+  const headingDeg = headingNum != null && Number.isFinite(headingNum) ? headingNum : null;
 
   const scaleNm = useMemo(() => {
     const mpp = (156543.03392 * Math.cos((cursor.lat * Math.PI) / 180)) / 2 ** cursor.zoom;
@@ -173,10 +160,8 @@ export function App() {
     return Math.max(0.1, barM / 1852);
   }, [cursor.lat, cursor.zoom]);
 
-  const modeBadge = own.mode === "live" ? "CANLI" : "SİM";
-  const modeClass = own.mode === "live" ? "live-badge" : "sim-badge";
   const propRows = featureHit ? summarizeProps(featureHit.properties) : [];
-
+  const gpsOk = !!own.position;
   const centerOwnShip = () => {
     const lat = own.position?.lat;
     const lon = own.position?.lon;
@@ -193,6 +178,35 @@ export function App() {
     const lon = own.position?.lon ?? cursor.lon;
     setMob({ lat, lon, droppedAtUtc: new Date().toISOString() });
     setStatusNote("MOB bırakıldı");
+  };
+
+  const toggleMainFocus = () => {
+    setMainFocus((f) => {
+      const next = f === "map" ? "camera" : "map";
+      setStatusNote(next === "camera" ? "Kamera ana görünüm" : "Harita ana görünüm");
+      return next;
+    });
+  };
+
+  const runPtz = (dir: PtzDir) => {
+    switch (dir) {
+      case "zoomin":
+        setCamZoom((z) => Math.min(8, +(z + 0.5).toFixed(1)));
+        setStatusNote(`Kamera zoom · ${Math.min(8, camZoom + 0.5).toFixed(1)}×`);
+        break;
+      case "zoomout":
+        setCamZoom((z) => Math.max(1, +(z - 0.5).toFixed(1)));
+        setStatusNote(`Kamera zoom · ${Math.max(1, camZoom - 0.5).toFixed(1)}×`);
+        break;
+      case "home":
+        setCamZoom(1);
+        setCamCursor(false);
+        setCamAisLock(false);
+        setStatusNote("Kamera ana pozisyon");
+        break;
+      default:
+        setStatusNote(`PTZ · ${dir} (CAM ${camIndex + 1})`);
+    }
   };
 
   const runCtrl = (id: CtrlId) => {
@@ -228,9 +242,7 @@ export function App() {
         break;
       }
       case "camHome":
-        setCamCursor(false);
-        setCamAisLock(false);
-        setStatusNote("Kamera ana pozisyon");
+        runPtz("home");
         break;
       case "camVideoTrack":
         setCamVideoTrack((v) => {
@@ -274,35 +286,33 @@ export function App() {
 
   return (
     <div className={`app-shell${panelOpen ? "" : " panel-collapsed"}`}>
-      <header className="titlebar">
-        <div className="titlebar-left no-drag">
-          <img
-            className="brand-wordmark"
-            src={scheme === "night" ? wordmarkDarkUrl : wordmarkLightUrl}
-            alt="IRBIS Marine Navigation Platform"
-            draggable={false}
-          />
-          <span className={modeClass}>{modeBadge}</span>
-        </div>
+      <header className="titlebar titlebar-bridgev2">
+        <div className="tb-shell no-drag">
+          <div className="titlebar-brand">
+            <img className="brand-emblem" src={emblemUrl} alt="IRBIS" draggable={false} />
+          </div>
 
-        <div className="titlebar-meta no-drag">
-          <span className="meta-chip">{formatUtc(now)}</span>
-          <span className="meta-chip" title={activeCell || undefined}>
-            {activeCell === "NAVIONICS" || !activeCell
-              ? "NAVIONICS"
-              : /^TR/i.test(activeCell)
-                ? "LAB S-57"
-                : activeCell}
-          </span>
-          <span className="meta-chip hide-sm">AIS {aisOn ? ais.count : 0}</span>
-          <button
-            type="button"
-            className="rail-toggle"
-            title={panelOpen ? "Paneli gizle" : "Paneli göster"}
-            onClick={() => setPanelOpen((v) => !v)}
-          >
-            {panelOpen ? "⟩" : "⟨"}
-          </button>
+          <div className="tb-metrics tb-metrics-left" aria-label="Seyir">
+            <TelemChip label="DEPTH" value={own.metrics.depth.value} unit="m" stale={own.metrics.depth.stale || own.metrics.depth.missing} />
+            <TelemChip label="SOG" value={own.metrics.sog.value} unit="kn" stale={own.metrics.sog.stale || own.metrics.sog.missing} />
+            <TelemChip label="COG" value={own.metrics.cog.value} unit="°" stale={own.metrics.cog.stale || own.metrics.cog.missing} />
+          </div>
+
+          <div className="tb-compass-wrap" aria-label="Pusula">
+            <CompassRibbon headingDeg={headingDeg} />
+          </div>
+
+          <div className="tb-metrics tb-metrics-right" aria-label="Konum">
+            <TelemChip label="HDG" value={own.metrics.hdg.value} unit={own.metrics.hdg.unit || "°"} stale={own.metrics.hdg.stale || own.metrics.hdg.missing} />
+            <div className={`telem-chip telem-chip-wide${gpsOk ? "" : " stale"}`}>
+              <span className="telem-chip-l">POS</span>
+              <strong className="telem-chip-v telem-chip-pos">{posLabel}</strong>
+            </div>
+            <div className="telem-chip telem-chip-wide">
+              <span className="telem-chip-l">İMLEÇ POS</span>
+              <strong className="telem-chip-v telem-chip-pos">{pointerLabel ?? "—"}</strong>
+            </div>
+          </div>
         </div>
 
         <div className="window-controls no-drag">
@@ -336,7 +346,7 @@ export function App() {
       </header>
 
       <div className="workspace">
-        <main className="chart-stage" aria-label="Harita">
+        <main className={`chart-stage stage-swap focus-${mainFocus}`} aria-label="Ana sahne">
           {mob ? (
             <div className="mob-banner" role="alert">
               MOB AKTİF · {formatCoord(mob.lat, mob.lon)}
@@ -346,32 +356,40 @@ export function App() {
             </div>
           ) : null}
 
-          <ChartMap
-            onMove={onMove}
-            onCursorMove={onCursorMove}
-            ownShip={own.position}
-            headingDeg={own.state?.headingDegTrue?.value}
-            aisTargets={ais.targets}
-            aisVisible={aisOn}
-            radarVisible={radarOn}
-            radarInfo={radarInfo}
-            radarArpa={radarArpa}
-            reloadToken={chartReload}
-            scheme={scheme}
-            onFeatureQuery={onFeatureQuery}
-          />
-
-          <div className="exp-chip" role="status" title="Deneysel — seyrüsefer için değil">
-            DENEYSEL
+          <div className="stage-pane stage-map" data-role={mainFocus === "map" ? "primary" : "pip"}>
+            <ChartMap
+              onMove={onMove}
+              onCursorMove={onCursorMove}
+              ownShip={own.position}
+              headingDeg={own.state?.headingDegTrue?.value}
+              aisTargets={ais.targets}
+              aisVisible={aisOn}
+              radarVisible={radarOn}
+              radarInfo={radarInfo}
+              radarArpa={radarArpa}
+              reloadToken={chartReload}
+              scheme={scheme}
+              onFeatureQuery={onFeatureQuery}
+            />
+            {mainFocus === "camera" ? (
+              <button type="button" className="pip-hit" aria-label="Haritayı büyüt" onClick={toggleMainFocus}>
+                <span>HARİTA</span>
+                <small>Dokun · tam ekran</small>
+              </button>
+            ) : null}
           </div>
 
-          {pointerLabel ? (
-            <div className="cursor-coord" role="status" aria-live="polite">
-              <span className="cursor-coord-label">İmleç</span>
-              <span className="cursor-coord-value">{pointerLabel}</span>
-              <span className="cursor-coord-zoom">z{cursor.zoom.toFixed(1)}</span>
-            </div>
-          ) : null}
+          <div className="stage-pane stage-camera" data-role={mainFocus === "camera" ? "primary" : "pip"}>
+            <CameraViewport camIndex={camIndex} zoom={camZoom} large={mainFocus === "camera"} />
+            {mainFocus === "map" ? (
+              <button type="button" className="pip-hit" aria-label="Kamerayı büyüt" onClick={toggleMainFocus}>
+                <span>CAM {camIndex + 1}</span>
+                <small>Dokun · tam ekran</small>
+              </button>
+            ) : null}
+          </div>
+
+          <PtzPad onCommand={runPtz} camIndex={camIndex} zoom={camZoom} />
 
           {statusNote ? (
             <div className="status-toast" role="status">
@@ -379,7 +397,7 @@ export function App() {
             </div>
           ) : null}
 
-          {featureHit ? (
+          {featureHit && mainFocus === "map" ? (
             <div className="feature-query" role="dialog" aria-label="Nesne sorgusu">
               <div className="feature-query-head">
                 <div>
@@ -405,33 +423,49 @@ export function App() {
             </div>
           ) : null}
 
-          <div className="hud-tools">
-            <div className="zoom-cluster">
-              <button
-                type="button"
-                aria-label="Yakınlaştır"
-                onClick={() => window.dispatchEvent(new CustomEvent("irbis:map-zoom", { detail: 1 }))}
-              >
-                +
-              </button>
-              <button
-                type="button"
-                aria-label="Uzaklaştır"
-                onClick={() => window.dispatchEvent(new CustomEvent("irbis:map-zoom", { detail: -1 }))}
-              >
-                −
-              </button>
+          {mainFocus === "map" ? (
+            <div className="hud-tools">
+              <div className="zoom-cluster">
+                <button
+                  type="button"
+                  aria-label="Yakınlaştır"
+                  onClick={() => window.dispatchEvent(new CustomEvent("irbis:map-zoom", { detail: 1 }))}
+                >
+                  +
+                </button>
+                <button
+                  type="button"
+                  aria-label="Uzaklaştır"
+                  onClick={() => window.dispatchEvent(new CustomEvent("irbis:map-zoom", { detail: -1 }))}
+                >
+                  −
+                </button>
+              </div>
+              <div className="scale-bar">~{scaleNm.toFixed(1)} NM</div>
             </div>
-            <div className="scale-bar">~{scaleNm.toFixed(1)} NM</div>
-          </div>
+          ) : null}
+
+          <nav className="dock-bar no-drag" aria-label="Ana menü">
+            <div className="dock-island">
+              <button type="button" className={mainFocus === "map" ? "active" : ""} onClick={() => setMainFocus("map")}>
+                HARİTA
+              </button>
+              <button type="button" className={mainFocus === "camera" ? "active" : ""} onClick={() => setMainFocus("camera")}>
+                KAMERA
+              </button>
+              <button type="button" className={aisOn ? "active" : ""} onClick={() => runCtrl("aisOn")}>
+                AIS
+              </button>
+              <span className="dock-clock">{formatLocalStamp(now)}</span>
+            </div>
+          </nav>
         </main>
 
-        <aside className="side-panel side-panel-bridge" aria-label="Kontrol paneli">
+        <aside className="side-panel side-panel-bridge side-panel-slim" aria-label="Kontrol paneli">
           <div className="bridge-head">
             <div className="bridge-brand">
-              <div className="bridge-mark" aria-hidden />
               <div>
-                <div className="bridge-kicker">Bridge</div>
+                <div className="bridge-kicker">IRBIS</div>
                 <div className="bridge-title">Kontrol</div>
               </div>
             </div>
@@ -441,93 +475,26 @@ export function App() {
           </div>
 
           <div className="bridge-body">
-            <div className="meter-mosaic">
-              <MeterCard label="SOG" unit="kn" metric={own.metrics.sog} />
-              <MeterCard label="COG" unit="°T" metric={own.metrics.cog} />
-              <MeterCard label="Derinlik" unit="m" metric={own.metrics.depth} />
-              <MeterCard label="Pruva" unit="°" metric={own.metrics.hdg} />
-              <MeterCard label="POS" value={posLabel} wide />
-            </div>
-
-            <div className="bridge-stamp">
-              <div className="bridge-stamp-ico" aria-hidden>
-                ⌖
-              </div>
-              <div>
-                <div className="bridge-stamp-main">{pointerLabel ?? "İmleç haritada…"}</div>
-                <div className="bridge-stamp-sub">{formatLocalStamp(now)}</div>
-              </div>
+            <div className="pos-card">
+              <div className="pos-card-label">POS</div>
+              <div className="pos-card-val">{posLabel}</div>
+              <div className="pos-card-sub">{pointerLabel ?? "İmleç haritada…"}</div>
             </div>
 
             <section className="bridge-zone">
               <div className="zone-head">
-                <span>
-                  <i className="zone-dot" aria-hidden />
-                  Radar
-                </span>
-                <div className="radar-ab" role="group" aria-label="Radar kaynağı">
-                  <button
-                    type="button"
-                    className={radarLetter === "A" ? "active" : ""}
-                    onClick={() => {
-                      setRadarLetter("A");
-                      setStatusNote("Radar kaynağı · A");
-                    }}
-                  >
-                    A
-                  </button>
-                  <button
-                    type="button"
-                    className={radarLetter === "B" ? "active" : ""}
-                    onClick={() => {
-                      setRadarLetter("B");
-                      setStatusNote("Radar kaynağı · B");
-                    }}
-                  >
-                    B
-                  </button>
-                </div>
-              </div>
-
-              <div className="bento-radar">
-                <button
-                  type="button"
-                  className={`power-orb${radarOn ? " on" : ""}`}
-                  title="Radar aç"
-                  aria-pressed={radarOn}
-                  onClick={() => runCtrl("radarOn")}
-                >
-                  <CtrlGlyph kind="radarSweep" />
-                  <span>{radarOn ? `Radar ${radarLetter}` : "Radar"}</span>
-                </button>
-                <div className="bento-stack">
-                  <ChipBtn id="radarInfo" label="Bilgi" active={radarInfo} onClick={runCtrl}>
-                    <CtrlGlyph kind="radarInfo" />
-                  </ChipBtn>
-                  <ChipBtn id="radarArpa" label="ARPA" active={radarArpa} onClick={runCtrl}>
-                    <CtrlGlyph kind="arpa" />
-                  </ChipBtn>
-                </div>
-              </div>
-            </section>
-
-            <section className="bridge-zone">
-              <div className="zone-head">
-                <span>
-                  <i className="zone-dot cam" aria-hidden />
-                  Kamera
-                </span>
+                <span>Kamera</span>
                 <em>CAM {camIndex + 1}</em>
               </div>
               <div className="chip-rail">
-                <ChipBtn id="camAutoFocus" label="Focus" active={camAutoFocus} onClick={runCtrl}>
-                  <CtrlGlyph kind="camA" />
-                </ChipBtn>
                 <ChipBtn id="camSwitch" label="Değiştir" active={false} onClick={runCtrl}>
                   <CtrlGlyph kind="camSwitch" />
                 </ChipBtn>
                 <ChipBtn id="camHome" label="Ana" active={false} onClick={runCtrl}>
                   <CtrlGlyph kind="home" />
+                </ChipBtn>
+                <ChipBtn id="camAutoFocus" label="Focus" active={camAutoFocus} onClick={runCtrl}>
+                  <CtrlGlyph kind="camA" />
                 </ChipBtn>
                 <ChipBtn id="camVideoTrack" label="Track" active={camVideoTrack} onClick={runCtrl}>
                   <CtrlGlyph kind="track" />
@@ -543,10 +510,7 @@ export function App() {
 
             <section className="bridge-zone">
               <div className="zone-head">
-                <span>
-                  <i className="zone-dot nav" aria-hidden />
-                  Seyir
-                </span>
+                <span>Seyir</span>
               </div>
               <div className="bento-nav bento-nav-2">
                 <button type="button" className="hero-center" title="Teknemi merkeze al" onClick={() => runCtrl("centerOwn")}>
@@ -564,62 +528,126 @@ export function App() {
               </div>
             </section>
 
+            <details className="bridge-adv">
+              <summary>Radar (sonra)</summary>
+              <div className="radar-ab" role="group" aria-label="Radar kaynağı">
+                <button type="button" className={radarLetter === "A" ? "active" : ""} onClick={() => { setRadarLetter("A"); setStatusNote("Radar · A"); }}>A</button>
+                <button type="button" className={radarLetter === "B" ? "active" : ""} onClick={() => { setRadarLetter("B"); setStatusNote("Radar · B"); }}>B</button>
+              </div>
+              <div className="chip-rail" style={{ marginTop: 8 }}>
+                <ChipBtn id="radarOn" label={radarOn ? `Radar ${radarLetter}` : "Radar"} active={radarOn} onClick={runCtrl}>
+                  <CtrlGlyph kind="radarSweep" />
+                </ChipBtn>
+                <ChipBtn id="radarInfo" label="Bilgi" active={radarInfo} onClick={runCtrl}>
+                  <CtrlGlyph kind="radarInfo" />
+                </ChipBtn>
+                <ChipBtn id="radarArpa" label="ARPA" active={radarArpa} onClick={runCtrl}>
+                  <CtrlGlyph kind="arpa" />
+                </ChipBtn>
+              </div>
+            </details>
+
             <div className="bridge-footer">
               <button type="button" className={`ghost-btn${mob ? " danger" : ""}`} title="MOB" onClick={dropMob}>
                 <CtrlGlyph kind="mob" />
                 <span>MOB</span>
               </button>
-              <button
-                type="button"
-                className="ghost-btn"
-                title="Gündüz / gece"
-                onClick={() => onScheme(scheme === "day" ? "night" : "day")}
-              >
-                <CtrlGlyph kind="daynight" />
-                <span>{scheme === "night" ? "Gece" : "Gündüz"}</span>
-              </button>
-              <button type="button" className="ghost-btn" title="Kapat" onClick={() => void window.irbis?.windowClose?.()}>
-                <CtrlGlyph kind="exit" />
-                <span>Çık</span>
-              </button>
-            </div>
-
-            <div className="bridge-link">
-              <span className={`link-dot${own.mode === "live" ? " live" : " sim"}`} />
-              <span>NMEA UDP</span>
-              <code>:{own.udpPort}</code>
             </div>
           </div>
         </aside>
       </div>
-
     </div>
   );
 }
 
-function MeterCard({
-  label,
-  unit,
-  metric,
-  value,
-  wide,
-}: {
-  label: string;
-  unit?: string;
-  metric?: { value: string; unit?: string; stale: boolean; missing: boolean };
-  value?: string;
-  wide?: boolean;
-}) {
-  const stale = metric ? metric.stale || metric.missing : false;
-  const shown = value ?? metric?.value ?? "---";
-  const unitTxt = unit ?? metric?.unit ?? "";
+function TelemChip({ label, value, unit, stale }: { label: string; value: string; unit: string; stale?: boolean }) {
   return (
-    <div className={`meter-card${wide ? " wide" : ""}${stale ? " stale" : ""}`}>
-      <div className="meter-card-top">
-        <span>{label}</span>
-        {unitTxt ? <span className="meter-card-unit">{unitTxt}</span> : null}
+    <div className={`telem-chip${stale ? " stale" : ""}`}>
+      <span className="telem-chip-l">{label}</span>
+      <strong className="telem-chip-v">{value}</strong>
+      {unit ? <span className="telem-chip-u">{unit}</span> : null}
+    </div>
+  );
+}
+
+function CompassRibbon({ headingDeg }: { headingDeg: number | null }) {
+  const h = headingDeg ?? 0;
+  const tickW = 28;
+  const span = 150; // degrees visible each side
+  const marks: Array<{ deg: number; label: string; major: boolean }> = [];
+  for (let offset = -span; offset <= span; offset += 15) {
+    const deg = ((Math.round(h) + offset) % 360 + 360) % 360;
+    const major = deg % 45 === 0;
+    const label = major ? CARDINAL(deg) : "";
+    marks.push({ deg, label, major });
+  }
+  // Center the current heading under the needle: shift by fractional degree within tick
+  const frac = ((h % 15) + 15) % 15;
+  const shiftPx = -(frac / 15) * tickW;
+
+  return (
+    <div className="compass-ribbon">
+      <div className="compass-ribbon-track">
+        <div className="compass-ribbon-tape" style={{ transform: `translateX(${shiftPx}px)` }}>
+          {marks.map((m, i) => (
+            <div key={`${m.deg}-${i}`} className={`compass-ribbon-tick${m.major ? " major" : ""}`} style={{ width: tickW }}>
+              <i />
+              {m.label ? <span>{m.label}</span> : null}
+            </div>
+          ))}
+        </div>
+        <div className="compass-ribbon-needle" aria-hidden />
       </div>
-      <div className="meter-card-val">{shown}</div>
+      <div className="compass-ribbon-bubble">
+        <span className="compass-ribbon-caret" aria-hidden />
+        <strong>{headingDeg != null ? `${Math.round(headingDeg)}°` : "—"}</strong>
+      </div>
+    </div>
+  );
+}
+
+function CameraViewport({ camIndex, zoom, large }: { camIndex: number; zoom: number; large: boolean }) {
+  return (
+    <div className={`camera-viewport${large ? " large" : ""}`} data-cam={camIndex + 1}>
+      <div className="camera-feed" style={{ transform: `scale(${1 + (zoom - 1) * 0.08})` }}>
+        <div className="camera-scan" />
+        <div className="camera-grid-lines" aria-hidden />
+      </div>
+      <div className="camera-chrome">
+        <span>CAM {camIndex + 1}</span>
+        <span>{zoom.toFixed(1)}×</span>
+        <span>FLIR</span>
+      </div>
+    </div>
+  );
+}
+
+function PtzPad({
+  onCommand,
+  camIndex,
+  zoom,
+}: {
+  onCommand: (d: PtzDir) => void;
+  camIndex: number;
+  zoom: number;
+}) {
+  return (
+    <div className="ptz-pad" onClick={(e) => e.stopPropagation()} onPointerDown={(e) => e.stopPropagation()}>
+      <div className="ptz-meta">
+        <span>CAM {camIndex + 1}</span>
+        <span>{zoom.toFixed(1)}×</span>
+      </div>
+      <div className="ptz-cross">
+        <button type="button" className="ptz-btn n" aria-label="Yukarı" onClick={() => onCommand("up")}>▲</button>
+        <button type="button" className="ptz-btn w" aria-label="Sol" onClick={() => onCommand("left")}>◀</button>
+        <button type="button" className="ptz-btn home" aria-label="Ana" onClick={() => onCommand("home")}>⌂</button>
+        <button type="button" className="ptz-btn e" aria-label="Sağ" onClick={() => onCommand("right")}>▶</button>
+        <button type="button" className="ptz-btn s" aria-label="Aşağı" onClick={() => onCommand("down")}>▼</button>
+      </div>
+      <div className="ptz-zoom">
+        <button type="button" aria-label="Zoom +" onClick={() => onCommand("zoomin")}>+</button>
+        <button type="button" aria-label="Zoom −" onClick={() => onCommand("zoomout")}>−</button>
+      </div>
     </div>
   );
 }
@@ -692,7 +720,6 @@ function CtrlGlyph({
           <circle cx="12" cy="12" r="5.5" opacity="0.55" />
           <circle cx="12" cy="12" r="2" fill="currentColor" stroke="none" />
           <path d="M12 12l7-5" strokeWidth="2.2" />
-          <path d="M12 3a9 9 0 018.5 6" opacity="0.7" />
         </svg>
       );
     case "radarInfo":
@@ -708,7 +735,6 @@ function CtrlGlyph({
         <svg {...common}>
           <circle cx="12" cy="12" r="3.2" />
           <path d="M12 2.8v3.2M12 18v3.2M2.8 12h3.2M18 12h3.2" />
-          <path d="M5.2 5.2l2.2 2.2M16.6 16.6l2.2 2.2M18.8 5.2l-2.2 2.2M7.4 16.6l-2.2 2.2" opacity="0.7" />
         </svg>
       );
     case "camA":
@@ -716,7 +742,6 @@ function CtrlGlyph({
         <svg {...common}>
           <rect x="2.5" y="6.5" width="13.5" height="11" rx="2.2" />
           <path d="M16 9.2l5-2.4v10.4l-5-2.4z" />
-          <path d="M7.2 15.2l1.8-5.2 1.8 5.2M7.7 13.6h2.8" strokeWidth="1.5" />
         </svg>
       );
     case "camSwitch":
@@ -724,7 +749,6 @@ function CtrlGlyph({
         <svg {...common}>
           <rect x="2.5" y="7" width="12.5" height="10" rx="2" />
           <path d="M15 9.5l5.5-2.6v10.2L15 14.5z" />
-          <path d="M6 4.5h5M8.5 3v3" />
         </svg>
       );
     case "home":
@@ -732,14 +756,12 @@ function CtrlGlyph({
         <svg {...common}>
           <path d="M4 11.2 12 4.5l8 6.7" />
           <path d="M6.5 10.5V19h11v-8.5" />
-          <path d="M10 19v-5h4v5" />
         </svg>
       );
     case "track":
       return (
         <svg {...common}>
           <path d="M4.5 12a7.5 7.5 0 1013.2-5" />
-          <path d="M17.8 3.8v4.2h-4.2" />
           <circle cx="12" cy="12" r="2" fill="currentColor" stroke="none" />
         </svg>
       );
@@ -747,7 +769,6 @@ function CtrlGlyph({
       return (
         <svg {...common}>
           <path d="M5 3.8 11.8 20l2.1-6.1L20 11.8z" />
-          <path d="M13.5 13.5l4.8 6.2" />
         </svg>
       );
     case "lock":
@@ -755,23 +776,18 @@ function CtrlGlyph({
         <svg {...common}>
           <rect x="5.5" y="11" width="13" height="9.5" rx="2" />
           <path d="M8 11V8.2a4 4 0 018 0V11" />
-          <circle cx="12" cy="15.5" r="1.2" fill="currentColor" stroke="none" />
         </svg>
       );
     case "ship":
       return (
         <svg {...common} width={26} height={26}>
-          <path d="M12 2.8 17.8 18.5 12 15.2 6.2 18.5z" fill="currentColor" fillOpacity="0.15" />
           <path d="M12 2.8 17.8 18.5 12 15.2 6.2 18.5z" />
-          <path d="M8 20.5h8" />
         </svg>
       );
     case "ais":
       return (
         <svg {...common}>
           <path d="M12 3.5 16.5 17l-4.5-2.8L7.5 17z" />
-          <path d="M5.5 20.2h13" />
-          <path d="M9 8.5h6" opacity="0.5" />
         </svg>
       );
     case "mob":

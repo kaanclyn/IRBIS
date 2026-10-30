@@ -229,7 +229,7 @@ async function buildStyle(cfg: ChartConfig, scheme: ChartScheme): Promise<{
             tiles: [cfg.navionics!.tileUrl],
             tileSize: 256,
             maxzoom: 18,
-            attribution: "Navionics (offline cache)",
+            attribution: "",
           },
           ...(cfg.navionics?.sonarUrl
             ? {
@@ -238,7 +238,7 @@ async function buildStyle(cfg: ChartConfig, scheme: ChartScheme): Promise<{
                   tiles: [cfg.navionics.sonarUrl],
                   tileSize: 256,
                   maxzoom: 18,
-                  attribution: "Navionics SonarChart",
+                  attribution: "",
                 },
               }
             : {}),
@@ -736,7 +736,6 @@ export function ChartMap({
         });
         mapRef.current = map;
 
-        map.addControl(new maplibregl.AttributionControl({ compact: true }), "bottom-left");
         map.addControl(
           new maplibregl.NavigationControl({ showCompass: true, visualizePitch: false }),
           "top-right",
@@ -745,28 +744,7 @@ export function ChartMap({
         map.on("load", () => {
           if (!map) return;
           pushOverlays(map, schemeRef.current);
-          const n = cfg.readyCells?.length ?? 0;
-          const remapNote = styleMeta.remapped ? " · renk eşlemesi" : "";
-          if (!cancelled) {
-            if (cfg.mapMode === "navionics") {
-              const tiles = cfg.navionics?.cache?.count;
-              setStatus(
-                `Navionics offline${tiles != null ? ` · ${tiles} karo` : ""} · ${schemeRef.current}${cfg.warning ? " · " + cfg.warning : ""}`,
-              );
-            } else if (cfg.bakeReady && n > 0) {
-              setStatus(
-                `S-57 · ${n} hücre · ${cfg.cellName} · ${schemeRef.current}${remapNote}${cfg.warning ? " · " + cfg.warning : ""}`,
-              );
-            } else if (cfg.warning) {
-              setStatus(cfg.warning);
-            } else if (useWorld && !saved) {
-              setStatus(
-                `S-57 lab · ${n} hücre · ${schemeRef.current}${remapNote} · offline void`,
-              );
-            } else {
-              setStatus(`S-57 · ${cfg.cellName} · ${n} hücre · ${schemeRef.current}${remapNote}`);
-            }
-          }
+          if (!cancelled) setStatus("");
         });
 
         const setAisCursor = (on: boolean) => {
@@ -896,13 +874,7 @@ export function ChartMap({
           if (!mapRef.current) return;
           mapRef.current.jumpTo({ center: c, zoom: z });
           pushOverlays(mapRef.current, scheme);
-          const n = cfg!.readyCells?.length ?? 0;
-          const remapNote = styleMeta.remapped ? " · renk eşlemesi" : "";
-          if (cfg!.warning && !cfg!.bakeReady) {
-            setStatus(cfg!.warning);
-          } else {
-            setStatus(`S-57 · ${cfg!.cellName} · ${n} hücre · ${scheme}${remapNote}`);
-          }
+          setStatus("");
           setError(null);
         });
       } catch (err) {
@@ -984,10 +956,22 @@ export function ChartMap({
     });
   }, [radarVisible, radarInfo, radarArpa, ownShip, scheme]);
 
+  useEffect(() => {
+    const el = containerRef.current;
+    const map = mapRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      mapRef.current?.resize();
+    });
+    ro.observe(el);
+    map?.resize();
+    return () => ro.disconnect();
+  }, []);
+
   return (
     <div className={`chart-map-root scheme-${scheme}`}>
       <div ref={containerRef} className="chart-map-canvas" />
-      <div className="chart-watermark">{error ? `Hata: ${error}` : status}</div>
+      {error ? <div className="chart-watermark chart-watermark-error">Hata: {error}</div> : null}
     </div>
   );
 }
