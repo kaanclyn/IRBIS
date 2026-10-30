@@ -63,29 +63,87 @@ function createOnvifService({ registry, streamProxy, broadcast } = {}) {
   /** @type {Map<string, import('onvif').Cam>} */
   const sessions = new Map();
 
-  async function discover(timeoutMs = 5000) {
+  function parseXAddrs(raw, fallbackHost) {
+    const parts = String(raw || "")
+      .split(/\s+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    for (const part of parts) {
+      try {
+        const u = new URL(part);
+        if (u.hostname) {
+          return {
+            hostname: u.hostname,
+            port: Number(u.port) || (u.protocol === "https:" ? 443 : 80),
+            path: u.pathname || "/",
+          };
+        }
+      } catch {
+        /* try next */
+      }
+    }
+    if (fallbackHost) {
+      return { hostname: fallbackHost, port: 80, path: "/" };
+    }
+    return null;
+  }
+
+  async function discover(timeoutMs = 8000) {
     return new Promise((resolve) => {
       const found = [];
-      const onDevice = (cam, rinfo) => {
-        found.push({
-          hostname: cam.hostname || rinfo?.address,
-          port: cam.port || 80,
-          xaddrs: cam.xaddrs || [],
-          name: cam.hostname || rinfo?.address,
-        });
+      const pushHit = (hit) => {
+        if (!hit?.hostname) return;
+        found.push(hit);
       };
-      const onError = (err) => log.warn("onvif discovery", err?.message || err);
+
+      // resolve:false → empty/broken XAddrs won't throw Invalid URL inside onvif
+      const onDevice = (data, rinfo) => {
+        try {
+          const match = data?.probeMatches?.probeMatch || data?.probeMatch || data;
+          const xaddrs = match?.XAddrs || match?.xaddrs || "";
+          const parsed = parseXAddrs(xaddrs, rinfo?.address);
+          if (!parsed) return;
+          pushHit({
+            hostname: parsed.hostname,
+            port: parsed.port,
+            name: parsed.hostname,
+            xaddrs: String(xaddrs)
+              .split(/\s+/)
+              .filter(Boolean),
+          });
+        } catch (err) {
+          if (rinfo?.address) {
+            pushHit({ hostname: rinfo.address, port: 80, name: rinfo.address, xaddrs: [] });
+          }
+          log.warn("onvif discovery parse", err?.message || err);
+        }
+      };
+
+      const onError = (msg) => {
+        const text = String(msg || "");
+        const m = /Wrong SOAP message from ([0-9a-fA-F.:]+):(\d+)/.exec(text);
+        if (m) {
+          // Cihaz cevap verdi ama SOAP bozuk — IP yine listelensin (manuel ekle)
+          pushHit({ hostname: m[1], port: 80, name: m[1], xaddrs: [] });
+        }
+        log.warn("onvif discovery", text.slice(0, 160));
+      };
+
       Discovery.on("device", onDevice);
       Discovery.on("error", onError);
-      Discovery.probe({ timeout: timeoutMs }, (err) => {
+      Discovery.probe({ timeout: timeoutMs, resolve: false }, (err) => {
         Discovery.removeListener("device", onDevice);
         Discovery.removeListener("error", onError);
-        if (err) log.warn("onvif probe", err);
-        // dedupe by host
+        if (err) {
+          const list = Array.isArray(err) ? err : [err];
+          for (const e of list) {
+            if (e && e.code !== "ERR_INVALID_URL") log.warn("onvif probe", e?.message || e);
+          }
+        }
         const map = new Map();
         for (const d of found) {
           if (!d.hostname) continue;
-          map.set(`${d.hostname}:${d.port}`, d);
+          map.set(`${d.hostname}:${d.port || 80}`, d);
         }
         resolve([...map.values()]);
       });

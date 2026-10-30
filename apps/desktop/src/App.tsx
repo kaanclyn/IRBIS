@@ -8,6 +8,9 @@ import type { MobPoint } from "./nav/types";
 import emblemUrl from "./assets/brand/irbis-emblem-mark.png";
 import { AisShipIcon, RadarIcon, RadarIconAB, RadarIconInfo, RadarIconMarpa } from "./components/DockIcons";
 import { MarineTopbar, formatCoordParts } from "./components/MarineTopbar";
+import { SettingsPanel } from "./components/SettingsPanel";
+import { CameraWall } from "./components/CameraWall";
+import { loadCamLayout, saveCamLayout, type CamLayoutState } from "./camera/cameraLayout";
 
 function formatCoord(lat: number, lon: number): string {
   const p = formatCoordParts(lat, lon);
@@ -97,10 +100,38 @@ export function App() {
   const [camVideoTrack, setCamVideoTrack] = useState(false);
   const [camCursor, setCamCursor] = useState(false);
   const [camAisLock, setCamAisLock] = useState(false);
+  const [camLayout, setCamLayout] = useState<CamLayoutState>(() => loadCamLayout());
 
   const own = useOwnShip();
   const ais = useAis();
   const cams = useCameras();
+
+  const updateCamLayout = useCallback((next: CamLayoutState) => {
+    setCamLayout(next);
+    saveCamLayout(next);
+  }, []);
+
+  useEffect(() => {
+    if (!cams.cameras.length) return;
+    setCamLayout((prev) => {
+      if (prev.slots.some((s) => s.cameraId)) return prev;
+      const first = cams.cameras[0]!;
+      const next: CamLayoutState = {
+        ...prev,
+        slots: [
+          { cameraId: first.id, stream: "visible" },
+          prev.slots[1]!,
+          prev.slots[2]!,
+          prev.slots[3]!,
+        ],
+      };
+      saveCamLayout(next);
+      return next;
+    });
+  }, [cams.cameras]);
+
+  const focusedCamId = camLayout.slots[camLayout.focus]?.cameraId ?? null;
+  const focusedCam = cams.cameras.find((c) => c.id === focusedCamId) ?? cams.active;
 
   useEffect(() => {
     const id = window.setInterval(() => setNow(new Date()), 1000);
@@ -367,23 +398,40 @@ export function App() {
           </div>
 
           <div className="stage-pane stage-camera" data-role={cameraIsPip ? "pip" : "primary"} hidden={!cameraVisible}>
-            <CameraViewport
-              label={cams.active?.name ?? `CAM ${camIndex + 1}`}
-              playUrl={cams.playUrl}
-              streamKind={cams.streamKind}
-              status={cams.active?.status}
-              zoom={camZoom}
-              large={!cameraIsPip && viewMode !== "map"}
-              hasThermal={!!cams.active?.streams.thermal}
-              onToggleStream={() => {
-                const next = cams.streamKind === "visible" ? "thermal" : "visible";
-                if (next === "thermal" && !cams.active?.streams.thermal) return;
-                void cams.setStream(next).then(() => setStatusNote(next === "thermal" ? "Thermal stream" : "Visible stream"));
+            <CameraWall
+              layout={camLayout.layout}
+              slots={camLayout.slots}
+              focus={camLayout.focus}
+              cameras={cams.cameras}
+              pip={cameraIsPip}
+              onFocus={(index) => {
+                const id = camLayout.slots[index]?.cameraId;
+                updateCamLayout({ ...camLayout, focus: index });
+                if (id) void cams.setActive(id);
               }}
+              onAssign={(index, cameraId) => {
+                const slots = camLayout.slots.map((s, i) =>
+                  i === index ? { ...s, cameraId } : s,
+                ) as CamLayoutState["slots"];
+                updateCamLayout({ ...camLayout, slots, focus: index });
+                void cams.setActive(cameraId);
+                setStatusNote(`Kanal ${index + 1} · atandı`);
+              }}
+              onClear={(index) => {
+                const slots = camLayout.slots.map((s, i) =>
+                  i === index ? { ...s, cameraId: null } : s,
+                ) as CamLayoutState["slots"];
+                updateCamLayout({ ...camLayout, slots });
+              }}
+              onLayoutChange={
+                cameraIsPip
+                  ? undefined
+                  : (layout) => updateCamLayout({ ...camLayout, layout, focus: Math.min(camLayout.focus, layout - 1) })
+              }
             />
             {cameraIsPip ? (
               <button type="button" className="pip-hit" aria-label="Görünümü değiştir" onClick={cycleViewMode}>
-                <span>{cams.active?.name ?? `CAM ${camIndex + 1}`}</span>
+                <span>{focusedCam?.name ?? `CH ${(camLayout.focus % 4) + 1}`}</span>
                 <small>Dokun · sonraki görünüm</small>
               </button>
             ) : null}
@@ -392,9 +440,9 @@ export function App() {
           {cameraVisible ? (
             <PtzPad
               onCommand={runPtz}
-              label={cams.active?.name ?? `CAM ${camIndex + 1}`}
+              label={focusedCam?.name ?? `CAM ${camIndex + 1}`}
               zoom={camZoom}
-              ptzReady={!!cams.active?.capabilities.ptz}
+              ptzReady={!!focusedCam?.capabilities.ptz}
             />
           ) : null}
 
@@ -476,16 +524,6 @@ export function App() {
                 >
                   <span className="dock-radar-caret-glyph">›</span>
                 </button>
-                <button
-                  type="button"
-                  className={`dock-icon-btn dock-settings-btn${panelOpen ? " active" : ""}`}
-                  title="Ayarlar"
-                  aria-label="Ayarlar"
-                  aria-pressed={panelOpen}
-                  onClick={() => setPanelOpen((v) => !v)}
-                >
-                  <SettingsGlyph />
-                </button>
                 <div className="dock-radar-extra" aria-hidden={!radarMenuOpen}>
                   <button
                     type="button"
@@ -525,31 +563,30 @@ export function App() {
                   </button>
                 </div>
               </div>
+              <button
+                type="button"
+                className={`dock-icon-btn dock-settings-btn${panelOpen ? " active" : ""}`}
+                title="Ayarlar"
+                aria-label="Ayarlar"
+                aria-pressed={panelOpen}
+                onClick={() => setPanelOpen((v) => !v)}
+              >
+                <SettingsGlyph />
+              </button>
               <span className="dock-clock">{formatLocalStamp(now)}</span>
             </div>
           </nav>
         </main>
 
-        <aside className="side-panel side-panel-bridge side-panel-slim" aria-label="Ayarlar">
-          <div className="bridge-head">
-            <div className="bridge-brand">
-              <div>
-                <div className="bridge-kicker">IRBIS</div>
-                <div className="bridge-title">Ayarlar</div>
-              </div>
-            </div>
-            <button
-              type="button"
-              className="bridge-x"
-              aria-label="Ayarları kapat"
-              onClick={() => setPanelOpen(false)}
-            >
-              ×
-            </button>
-          </div>
-
-          <div className="bridge-body" />
-        </aside>
+        {panelOpen ? (
+          <SettingsPanel
+            cams={cams}
+            camLayout={camLayout}
+            onCamLayoutChange={updateCamLayout}
+            onClose={() => setPanelOpen(false)}
+            onNote={setStatusNote}
+          />
+        ) : null}
       </div>
     </div>
   );
@@ -605,59 +642,6 @@ function ViewModeIcon({ mode }: { mode: ViewMode }) {
         </svg>
       );
   }
-}
-
-function CameraViewport({
-  label,
-  playUrl,
-  streamKind,
-  status,
-  zoom,
-  large,
-  hasThermal,
-  onToggleStream,
-}: {
-  label: string;
-  playUrl: string | null;
-  streamKind: "visible" | "thermal";
-  status?: string;
-  zoom: number;
-  large: boolean;
-  hasThermal?: boolean;
-  onToggleStream?: () => void;
-}) {
-  return (
-    <div className={`camera-viewport${large ? " large" : ""}`} data-stream={streamKind}>
-      <div className="camera-feed" style={{ transform: `scale(${1 + (zoom - 1) * 0.08})` }}>
-        {playUrl ? (
-          <img className="camera-live" src={playUrl} alt={label} draggable={false} />
-        ) : (
-          <>
-            <div className="camera-scan" />
-            <div className="camera-grid-lines" aria-hidden />
-            <div className="camera-empty">ONVIF kamera yok</div>
-          </>
-        )}
-      </div>
-      <div className="camera-chrome">
-        <span>{label}</span>
-        <span>{zoom.toFixed(1)}×</span>
-        <button
-          type="button"
-          className="camera-stream-badge"
-          disabled={!hasThermal}
-          onClick={(e) => {
-            e.stopPropagation();
-            onToggleStream?.();
-          }}
-          title={hasThermal ? "Visible / Thermal değiştir" : "Thermal yok"}
-        >
-          {streamKind === "thermal" ? "THERMAL" : "VISIBLE"}
-        </button>
-        <span className="camera-status">{status === "online" ? "LIVE" : status?.toUpperCase() || "—"}</span>
-      </div>
-    </div>
-  );
 }
 
 function PtzPad({

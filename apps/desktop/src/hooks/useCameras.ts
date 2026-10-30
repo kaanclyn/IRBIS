@@ -54,7 +54,7 @@ export function useCameras() {
   );
 
   const discover = useCallback(async () => {
-    return (await window.irbis?.cameraDiscover?.({ timeoutMs: 5000 })) ?? [];
+    return (await window.irbis?.cameraDiscover?.({ timeoutMs: 8000 })) ?? [];
   }, []);
 
   const remove = useCallback(async (id: string) => {
