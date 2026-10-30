@@ -61,6 +61,45 @@ interface ChartLibrarySnapshot {
   trCellCount?: number;
 }
 
+interface CameraStreamInfo {
+  profileToken: string;
+  profileName?: string;
+  playUrl: string | null;
+  hasRtsp: boolean;
+}
+
+interface CameraDevicePublic {
+  id: string;
+  name: string;
+  host: string;
+  port: number;
+  username?: string;
+  manufacturer?: string | null;
+  model?: string | null;
+  streams: {
+    visible: CameraStreamInfo | null;
+    thermal: CameraStreamInfo | null;
+  };
+  capabilities: { ptz: boolean };
+  status: string;
+  lastSeenAt?: string | null;
+  error?: string | null;
+}
+
+interface CameraSnapshot {
+  activeId: string | null;
+  activeStream: "visible" | "thermal";
+  cameras: CameraDevicePublic[];
+  count: number;
+}
+
+interface CameraDiscoverHit {
+  hostname: string;
+  port: number;
+  name?: string;
+  xaddrs?: unknown[];
+}
+
 interface IrbisApi {
   getAppInfo: () => Promise<{ name: string; version: string; platform: string; logPath?: string }>;
   getChartConfig: () => Promise<ChartConfig>;
@@ -78,6 +117,25 @@ interface IrbisApi {
   onAis: (handler: (payload: unknown) => void) => () => void;
   onChartChanged: (handler: (payload: unknown) => void) => () => void;
   onWindowState: (handler: (payload: unknown) => void) => () => void;
+  cameraList: () => Promise<CameraSnapshot>;
+  cameraDiscover: (opts?: { timeoutMs?: number }) => Promise<CameraDiscoverHit[]>;
+  cameraAdd: (payload: {
+    host: string;
+    port?: number;
+    username: string;
+    password: string;
+    name?: string;
+  }) => Promise<CameraSnapshot>;
+  cameraRemove: (id: string) => Promise<CameraSnapshot | undefined>;
+  cameraSetActive: (id: string) => Promise<{ ok: boolean; error?: string } & Partial<CameraSnapshot>>;
+  cameraSetStream: (kind: "visible" | "thermal") => Promise<CameraSnapshot | null>;
+  cameraRefresh: (id: string) => Promise<CameraSnapshot | undefined>;
+  cameraPtz: (payload: {
+    id: string;
+    action: "up" | "down" | "left" | "right" | "zoomin" | "zoomout" | "home" | "stop";
+    speed?: number;
+  }) => Promise<{ ok: boolean; error?: string }>;
+  onCameras: (handler: (payload: CameraSnapshot) => void) => () => void;
 }
 
 interface Window {

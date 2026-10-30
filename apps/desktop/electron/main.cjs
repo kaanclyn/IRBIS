@@ -5,6 +5,9 @@ const { startChartServer, defaultChartRoot } = require("./chartServer.cjs");
 const { createChartLibrary } = require("./chartLibrary.cjs");
 const { createNmeaService } = require("./nmeaService.cjs");
 const { startNavionicsServer } = require("./navionicsServer.cjs");
+const { createCameraRegistry } = require("./cameraRegistry.cjs");
+const { createCameraStreamProxy } = require("./cameraStreamProxy.cjs");
+const { createOnvifService } = require("./onvifService.cjs");
 const { log } = require("./log.cjs");
 
 /** @type {BrowserWindow | null} */
@@ -17,6 +20,12 @@ let navionics = null;
 let nmea = null;
 /** @type {ReturnType<typeof createChartLibrary> | null} */
 let chartLib = null;
+/** @type {ReturnType<typeof createCameraRegistry> | null} */
+let cameras = null;
+/** @type {ReturnType<typeof createCameraStreamProxy> | null} */
+let camProxy = null;
+/** @type {ReturnType<typeof createOnvifService> | null} */
+let onvif = null;
 
 function ensureChartLibrary() {
   if (!chartLib) chartLib = createChartLibrary();
@@ -162,6 +171,15 @@ app.whenReady().then(async () => {
     log.error("nmea service failed", err);
   }
 
+  try {
+    cameras = createCameraRegistry({ broadcast });
+    camProxy = createCameraStreamProxy({ port: 18765 });
+    onvif = createOnvifService({ registry: cameras, streamProxy: camProxy, broadcast });
+    void onvif.hydrateProxies().catch((err) => log.warn("camera hydrate", err));
+  } catch (err) {
+    log.error("onvif camera service failed", err);
+  }
+
   createWindow();
 
   app.on("activate", () => {
@@ -172,6 +190,19 @@ app.whenReady().then(async () => {
 app.on("window-all-closed", () => {
   nmea?.stop();
   nmea = null;
+  try {
+    onvif?.stop?.();
+  } catch {
+    /* ignore */
+  }
+  onvif = null;
+  try {
+    camProxy?.stop?.();
+  } catch {
+    /* ignore */
+  }
+  camProxy = null;
+  cameras = null;
   try {
     navionics?.stop?.();
   } catch {
@@ -269,3 +300,34 @@ ipcMain.handle("irbis:rescan-charts", () => ensureChartLibrary().rescan());
 ipcMain.handle("irbis:get-ownship", () => nmea?.getState() ?? null);
 
 ipcMain.handle("irbis:get-ais", () => nmea?.getAis() ?? { targets: [], count: 0 });
+
+ipcMain.handle("irbis:camera-list", () => cameras?.snapshot() ?? { activeId: null, activeStream: "visible", cameras: [], count: 0 });
+
+ipcMain.handle("irbis:camera-discover", async (_e, opts) => {
+  if (!onvif) return [];
+  return onvif.discover(opts?.timeoutMs ?? 5000);
+});
+
+ipcMain.handle("irbis:camera-add", async (_e, payload) => {
+  if (!onvif) throw new Error("ONVIF servisi yok");
+  return onvif.addCamera(payload || {});
+});
+
+ipcMain.handle("irbis:camera-remove", async (_e, id) => {
+  if (!onvif) return cameras?.snapshot();
+  return onvif.removeCamera(String(id || ""));
+});
+
+ipcMain.handle("irbis:camera-set-active", (_e, id) => cameras?.setActive(String(id || "")) ?? { ok: false });
+
+ipcMain.handle("irbis:camera-set-stream", (_e, kind) => cameras?.setActiveStream(kind) ?? null);
+
+ipcMain.handle("irbis:camera-refresh", async (_e, id) => {
+  if (!onvif) return cameras?.snapshot();
+  return onvif.refreshStreams(String(id || ""));
+});
+
+ipcMain.handle("irbis:camera-ptz", async (_e, payload) => {
+  if (!onvif) return { ok: false, error: "ONVIF yok" };
+  return onvif.ptz(payload || {});
+});

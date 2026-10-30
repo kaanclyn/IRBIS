@@ -33,4 +33,17 @@ contextBridge.exposeInMainWorld("irbis", {
     ipcRenderer.on("irbis:window-state", listener);
     return () => ipcRenderer.removeListener("irbis:window-state", listener);
   },
+  cameraList: () => ipcRenderer.invoke("irbis:camera-list"),
+  cameraDiscover: (opts) => ipcRenderer.invoke("irbis:camera-discover", opts),
+  cameraAdd: (payload) => ipcRenderer.invoke("irbis:camera-add", payload),
+  cameraRemove: (id) => ipcRenderer.invoke("irbis:camera-remove", id),
+  cameraSetActive: (id) => ipcRenderer.invoke("irbis:camera-set-active", id),
+  cameraSetStream: (kind) => ipcRenderer.invoke("irbis:camera-set-stream", kind),
+  cameraRefresh: (id) => ipcRenderer.invoke("irbis:camera-refresh", id),
+  cameraPtz: (payload) => ipcRenderer.invoke("irbis:camera-ptz", payload),
+  onCameras: (handler) => {
+    const listener = (_event, payload) => handler(payload);
+    ipcRenderer.on("irbis:cameras", listener);
+    return () => ipcRenderer.removeListener("irbis:cameras", listener);
+  },
 });
