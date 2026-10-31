@@ -174,7 +174,21 @@ app.whenReady().then(async () => {
   try {
     cameras = createCameraRegistry({ broadcast });
     // Navionics tiles already bind 18765 — camera MJPEG proxy uses 18766+
-    camProxy = createCameraStreamProxy({ port: Number(process.env.IRBIS_CAMERA_PROXY_PORT || 18766) });
+    camProxy = createCameraStreamProxy({
+      port: Number(process.env.IRBIS_CAMERA_PROXY_PORT || 18766),
+      onStreamEvent: ({ cameraId, kind, playUrl, alive }) => {
+        try {
+          if (playUrl) cameras?.patchPlayUrl?.(cameraId, kind, playUrl);
+          cameras?.patchStatus?.(
+            cameraId,
+            alive ? "online" : "reconnecting",
+            alive ? null : "stream reconnecting",
+          );
+        } catch (err) {
+          log.warn("camera stream event", err?.message || err);
+        }
+      },
+    });
     onvif = createOnvifService({ registry: cameras, streamProxy: camProxy, broadcast });
     void onvif.hydrateProxies().catch((err) => log.warn("camera hydrate", err));
   } catch (err) {

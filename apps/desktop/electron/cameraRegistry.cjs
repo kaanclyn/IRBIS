@@ -125,7 +125,23 @@ function createCameraRegistry({ broadcast } = {}) {
   function patchPlayUrl(id, kind, playUrl) {
     const cam = getRaw(id);
     if (!cam?.streams?.[kind]) return snapshot();
+    if (cam.streams[kind].playUrl === playUrl) return snapshot();
     cam.streams[kind].playUrl = playUrl;
+    saveStore(store);
+    return emit();
+  }
+
+  function patchStatus(id, status, error = undefined) {
+    const cam = getRaw(id);
+    if (!cam) return snapshot();
+    const nextError = error !== undefined ? error : cam.error;
+    if (cam.status === status && cam.error === nextError) return snapshot();
+    cam.status = status;
+    if (error !== undefined) cam.error = error;
+    if (status === "online") {
+      cam.error = null;
+      cam.lastSeenAt = new Date().toISOString();
+    }
     saveStore(store);
     return emit();
   }
@@ -147,6 +163,7 @@ function createCameraRegistry({ broadcast } = {}) {
     setActive,
     setActiveStream,
     patchPlayUrl,
+    patchStatus,
     listRaw,
     reload,
     emit,

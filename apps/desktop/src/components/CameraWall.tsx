@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import type { CamLayout, CamSlot } from "../camera/cameraLayout";
 import { CAM_DRAG_MIME } from "../camera/cameraLayout";
 
@@ -84,7 +85,7 @@ export function CameraWall({
             >
               <div className="cam-cell-feed">
                 {playUrl ? (
-                  <img className="camera-live" src={playUrl} alt={cam?.name ?? "CAM"} draggable={false} />
+                  <LiveMjpeg src={playUrl} alt={cam?.name ?? "CAM"} />
                 ) : (
                   <div className="cam-cell-empty">
                     <span>{cam ? "Stream yok" : `Kanal ${slotIndex + 1}`}</span>
@@ -94,8 +95,10 @@ export function CameraWall({
               </div>
               <div className="cam-cell-chrome">
                 <span className="cam-cell-name">{cam?.name ?? `CH ${slotIndex + 1}`}</span>
-                <span className={`cam-cell-live${cam?.status === "online" ? " on" : ""}`}>
-                  {cam?.status === "online" ? "LIVE" : cam ? "—" : "BOŞ"}
+                <span
+                  className={`cam-cell-live${cam?.status === "online" ? " on" : ""}${cam?.status === "reconnecting" ? " wait" : ""}`}
+                >
+                  {cam?.status === "online" ? "LIVE" : cam?.status === "reconnecting" ? "YENİDEN…" : cam ? "—" : "BOŞ"}
                 </span>
                 {cam ? (
                   <button
@@ -117,6 +120,72 @@ export function CameraWall({
       </div>
     </div>
   );
+}
+
+/** Chromium'da multipart MJPEG kırılgan — proxy .jpg + blob polling */
+function toSnapUrl(playUrl: string) {
+  return playUrl.replace(/\.mjpg(\?|$)/i, ".jpg$1");
+}
+
+function LiveMjpeg({ src, alt }: { src: string; alt: string }) {
+  const [frame, setFrame] = useState<string | null>(null);
+  const snapBase = toSnapUrl(src);
+
+  useEffect(() => {
+    let cancelled = false;
+    let timer: number | null = null;
+    let objectUrl: string | null = null;
+    let n = 0;
+
+    const release = () => {
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+        objectUrl = null;
+      }
+    };
+
+    const pull = async () => {
+      if (cancelled) return;
+      n += 1;
+      const url = `${snapBase}${snapBase.includes("?") ? "&" : "?"}t=${Date.now()}_${n}`;
+      try {
+        const res = await fetch(url, { cache: "no-store" });
+        if (!res.ok) throw new Error(String(res.status));
+        const blob = await res.blob();
+        if (cancelled) return;
+        if (!blob.size || blob.size < 64) {
+          throw new Error("empty");
+        }
+        const next = URL.createObjectURL(blob);
+        release();
+        objectUrl = next;
+        setFrame(next);
+        timer = window.setTimeout(pull, 110);
+      } catch {
+        if (cancelled) return;
+        timer = window.setTimeout(pull, 600);
+      }
+    };
+
+    setFrame(null);
+    void pull();
+    return () => {
+      cancelled = true;
+      if (timer != null) window.clearTimeout(timer);
+      release();
+    };
+  }, [snapBase]);
+
+  if (!frame) {
+    return (
+      <div className="cam-cell-empty">
+        <span>Bağlanıyor…</span>
+        <small>{alt}</small>
+      </div>
+    );
+  }
+
+  return <img className="camera-live" src={frame} alt={alt} draggable={false} />;
 }
 
 export function CamDragChip({ id, name, host }: { id: string; name: string; host?: string }) {

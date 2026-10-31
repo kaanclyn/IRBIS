@@ -4463,6 +4463,11 @@ html[data-ui="light"] .side-panel-bridge {
   opacity: 1;
 }
 
+.cam-cell-live.wait {
+  color: #fbbf24;
+  opacity: 1;
+}
+
 .cam-cell-clear {
   width: 22px;
   height: 22px;

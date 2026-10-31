@@ -1,6 +1,172 @@
 const crypto = require("node:crypto");
-const { Cam, Discovery } = require("onvif");
+const dgram = require("node:dgram");
+const os = require("node:os");
+const { Cam } = require("onvif");
 const { log } = require("./log.cjs");
+
+const WS_DISCOVERY_ADDR = "239.255.255.250";
+const WS_DISCOVERY_PORT = 3702;
+
+function listIpv4Interfaces() {
+  const out = [];
+  const ifaces = os.networkInterfaces();
+  for (const [name, addrs] of Object.entries(ifaces)) {
+    for (const a of addrs || []) {
+      const fam = a.family;
+      // Node 18+: family is 4; older: 'IPv4'
+      if ((fam === "IPv4" || fam === 4) && !a.internal && a.address) {
+        out.push({ name, address: a.address });
+      }
+    }
+  }
+  return out;
+}
+
+function buildProbeXml() {
+  const messageId = `urn:uuid:${crypto.randomUUID()}`;
+  return Buffer.from(
+    '<Envelope xmlns="http://www.w3.org/2003/05/soap-envelope" xmlns:dn="http://www.onvif.org/ver10/network/wsdl">' +
+      "<Header>" +
+      '<wsa:MessageID xmlns:wsa="http://schemas.xmlsoap.org/ws/2004/08/addressing">' +
+      messageId +
+      "</wsa:MessageID>" +
+      '<wsa:To xmlns:wsa="http://schemas.xmlsoap.org/ws/2004/08/addressing">urn:schemas-xmlsoap-org:ws:2005:04:discovery</wsa:To>' +
+      '<wsa:Action xmlns:wsa="http://schemas.xmlsoap.org/ws/2004/08/addressing">http://schemas.xmlsoap.org/ws/2005/04/discovery/Probe</wsa:Action>' +
+      "</Header>" +
+      "<Body>" +
+      '<Probe xmlns="http://schemas.xmlsoap.org/ws/2005/04/discovery" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">' +
+      "<Types>dn:NetworkVideoTransmitter</Types>" +
+      "<Scopes />" +
+      "</Probe>" +
+      "</Body>" +
+      "</Envelope>",
+  );
+}
+
+function hitsFromProbeXml(xml, rinfo) {
+  const hits = [];
+  const text = String(xml || "");
+  const xaddrBlocks = [...text.matchAll(/<(?:\w+:)?XAddrs[^>]*>([^<]+)<\/(?:\w+:)?XAddrs>/gi)].map((m) =>
+    m[1].trim(),
+  );
+  const urls = xaddrBlocks
+    .flatMap((b) => b.split(/\s+/))
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  if (urls.length) {
+    for (const raw of urls) {
+      try {
+        const u = new URL(raw);
+        if (!u.hostname) continue;
+        hits.push({
+          hostname: u.hostname,
+          port: Number(u.port) || (u.protocol === "https:" ? 443 : 80),
+          name: u.hostname,
+          xaddrs: urls,
+          via: rinfo?.address || null,
+        });
+      } catch {
+        /* skip bad url */
+      }
+    }
+  }
+
+  // SOAP bozuk / XAddrs yok ama UDP cevap geldi → IP'yi yine ekle
+  if (!hits.length && rinfo?.address) {
+    hits.push({
+      hostname: rinfo.address,
+      port: 80,
+      name: rinfo.address,
+      xaddrs: [],
+      via: rinfo.address,
+    });
+  }
+  return hits;
+}
+
+/**
+ * Tek NIC üzerinden WS-Discovery Probe (WiFi / Ethernet / …).
+ * setMulticastInterface + o NIC IP'sine bind şart — yoksa sadece default route gider.
+ */
+function probeOnInterface({ name, address, timeoutMs, request }) {
+  return new Promise((resolve) => {
+    const found = [];
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      try {
+        socket.close();
+      } catch {
+        /* ignore */
+      }
+      resolve(found);
+    };
+
+    const socket = dgram.createSocket({ type: "udp4", reuseAddr: true });
+    socket.on("error", (err) => {
+      log.warn(`onvif discover ${name}(${address})`, err?.message || err);
+      finish();
+    });
+    socket.on("message", (msg, rinfo) => {
+      try {
+        for (const hit of hitsFromProbeXml(msg.toString(), rinfo)) {
+          found.push({ ...hit, iface: name, ifaceAddress: address });
+        }
+      } catch (err) {
+        log.warn(`onvif discover parse ${name}`, err?.message || err);
+        if (rinfo?.address) {
+          found.push({
+            hostname: rinfo.address,
+            port: 80,
+            name: rinfo.address,
+            xaddrs: [],
+            via: rinfo.address,
+            iface: name,
+            ifaceAddress: address,
+          });
+        }
+      }
+    });
+
+    socket.bind(0, address, () => {
+      try {
+        socket.setBroadcast(true);
+      } catch {
+        /* ignore */
+      }
+      try {
+        // Çıkış paketlerini bu NIC'ten gönder
+        socket.setMulticastInterface(address);
+      } catch (err) {
+        log.warn(`onvif multicast iface ${name}`, err?.message || err);
+      }
+      try {
+        socket.addMembership(WS_DISCOVERY_ADDR, address);
+      } catch {
+        try {
+          socket.addMembership(WS_DISCOVERY_ADDR);
+        } catch (err2) {
+          log.warn(`onvif membership ${name}`, err2?.message || err2);
+        }
+      }
+      socket.send(request, 0, request.length, WS_DISCOVERY_PORT, WS_DISCOVERY_ADDR, (err) => {
+        if (err) log.warn(`onvif probe send ${name}`, err?.message || err);
+      });
+      // İkinci probe — bazı kameralar ilk paketi kaçırır
+      setTimeout(() => {
+        try {
+          socket.send(request, 0, request.length, WS_DISCOVERY_PORT, WS_DISCOVERY_ADDR);
+        } catch {
+          /* ignore */
+        }
+      }, 300);
+    });
+
+    setTimeout(finish, Math.max(1500, timeoutMs || 8000));
+  });
+}
 
 const THERMAL_RE = /thermal|therm|flir|lwır|lwir|\bir\b|infrared|kızıl|kızılötesi/i;
 
@@ -89,65 +255,55 @@ function createOnvifService({ registry, streamProxy, broadcast } = {}) {
   }
 
   async function discover(timeoutMs = 8000) {
-    return new Promise((resolve) => {
-      const found = [];
-      const pushHit = (hit) => {
-        if (!hit?.hostname) return;
-        found.push(hit);
-      };
+    const ifaces = listIpv4Interfaces();
+    const request = buildProbeXml();
+    const t = Math.max(2000, Number(timeoutMs) || 8000);
 
-      // resolve:false → empty/broken XAddrs won't throw Invalid URL inside onvif
-      const onDevice = (data, rinfo) => {
-        try {
-          const match = data?.probeMatches?.probeMatch || data?.probeMatch || data;
-          const xaddrs = match?.XAddrs || match?.xaddrs || "";
-          const parsed = parseXAddrs(xaddrs, rinfo?.address);
-          if (!parsed) return;
-          pushHit({
-            hostname: parsed.hostname,
-            port: parsed.port,
-            name: parsed.hostname,
-            xaddrs: String(xaddrs)
-              .split(/\s+/)
-              .filter(Boolean),
-          });
-        } catch (err) {
-          if (rinfo?.address) {
-            pushHit({ hostname: rinfo.address, port: 80, name: rinfo.address, xaddrs: [] });
-          }
-          log.warn("onvif discovery parse", err?.message || err);
-        }
-      };
+    if (!ifaces.length) {
+      log.warn("onvif discover: IPv4 arayüz yok");
+      return [];
+    }
 
-      const onError = (msg) => {
-        const text = String(msg || "");
-        const m = /Wrong SOAP message from ([0-9a-fA-F.:]+):(\d+)/.exec(text);
-        if (m) {
-          // Cihaz cevap verdi ama SOAP bozuk — IP yine listelensin (manuel ekle)
-          pushHit({ hostname: m[1], port: 80, name: m[1], xaddrs: [] });
-        }
-        log.warn("onvif discovery", text.slice(0, 160));
-      };
+    log.info(
+      "onvif discover multi-NIC",
+      ifaces.map((i) => `${i.name}=${i.address}`).join(" | "),
+    );
 
-      Discovery.on("device", onDevice);
-      Discovery.on("error", onError);
-      Discovery.probe({ timeout: timeoutMs, resolve: false }, (err) => {
-        Discovery.removeListener("device", onDevice);
-        Discovery.removeListener("error", onError);
-        if (err) {
-          const list = Array.isArray(err) ? err : [err];
-          for (const e of list) {
-            if (e && e.code !== "ERR_INVALID_URL") log.warn("onvif probe", e?.message || e);
-          }
-        }
-        const map = new Map();
-        for (const d of found) {
-          if (!d.hostname) continue;
-          map.set(`${d.hostname}:${d.port || 80}`, d);
-        }
-        resolve([...map.values()]);
-      });
-    });
+    // WiFi + Ethernet + diğer tüm NIC'ler paralel probe
+    const batches = await Promise.all(
+      ifaces.map((iface) =>
+        probeOnInterface({
+          name: iface.name,
+          address: iface.address,
+          timeoutMs: t,
+          request,
+        }),
+      ),
+    );
+
+    const map = new Map();
+    for (const hit of batches.flat()) {
+      if (!hit?.hostname) continue;
+      // Link-local / bozuk atla
+      if (hit.hostname.startsWith("169.254.")) continue;
+      const key = `${hit.hostname}:${hit.port || 80}`;
+      const prev = map.get(key);
+      if (!prev) {
+        map.set(key, {
+          hostname: hit.hostname,
+          port: hit.port || 80,
+          name: hit.name || hit.hostname,
+          xaddrs: hit.xaddrs || [],
+          ifaces: hit.iface ? [hit.iface] : [],
+        });
+      } else if (hit.iface && !prev.ifaces.includes(hit.iface)) {
+        prev.ifaces.push(hit.iface);
+      }
+    }
+
+    const list = [...map.values()];
+    log.info(`onvif discover done · ${list.length} cihaz · ${ifaces.length} NIC`);
+    return list;
   }
 
   function connectCam({ hostname, port = 80, username, password }) {
@@ -270,6 +426,7 @@ function createOnvifService({ registry, streamProxy, broadcast } = {}) {
             cameraId: id,
             kind,
             rtspUrl: s.rtspUrl,
+            snapshotUrl: s.snapshotUrl || null,
             username: user,
             password: pass,
           });
@@ -321,6 +478,7 @@ function createOnvifService({ registry, streamProxy, broadcast } = {}) {
             cameraId: id,
             kind,
             rtspUrl: s.rtspUrl,
+            snapshotUrl: s.snapshotUrl || null,
             username: raw.username,
             password: raw.password,
           });
@@ -431,6 +589,7 @@ function createOnvifService({ registry, streamProxy, broadcast } = {}) {
             cameraId: raw.id,
             kind,
             rtspUrl: s.rtspUrl,
+            snapshotUrl: s.snapshotUrl || null,
             username: raw.username,
             password: raw.password,
           });
