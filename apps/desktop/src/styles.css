@@ -3154,10 +3154,12 @@ html[data-ui="light"] .side-panel-bridge {
 .camera-live {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
+  object-position: center;
   display: block;
   pointer-events: none;
   user-select: none;
+  background: #05080e;
 }
 
 .camera-empty {
@@ -3327,57 +3329,162 @@ html[data-ui="light"] .side-panel-bridge {
   background: rgba(56, 189, 248, 0.12);
 }
 
-/* PTZ pad — sol: kamera PiP'in sağında */
+/* PTZ joystick — basılı tut / bırakınca stop; aç-kapa */
 .ptz-pad {
   position: absolute;
   left: calc(16px + var(--pip-w) + 12px);
   right: auto;
   bottom: calc(var(--dock-h) + 16px);
   z-index: 7;
-  width: 148px;
-  padding: 10px;
-  border-radius: 20px;
-  background: rgba(10, 16, 26, 0.82);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  backdrop-filter: blur(16px) saturate(1.1);
-  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.35);
   color: #e2e8f0;
+  user-select: none;
+  touch-action: none;
+}
+
+.ptz-pad-collapsed {
+  width: auto;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+.ptz-fab {
+  position: relative;
+  width: 52px;
+  height: 52px;
+  border-radius: 16px;
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  background: linear-gradient(160deg, rgba(15, 23, 42, 0.92), rgba(8, 12, 22, 0.95));
+  color: #e0f2fe;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.4);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  backdrop-filter: blur(14px);
+}
+
+.ptz-fab-ring {
+  position: absolute;
+  inset: 8px;
+  border-radius: 999px;
+  border: 1.5px solid rgba(56, 189, 248, 0.45);
+  border-top-color: transparent;
+  animation: ptz-spin 2.4s linear infinite;
+}
+
+.ptz-fab-label {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+}
+
+@keyframes ptz-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.ptz-pad-open {
+  width: min(168px, 42vw);
+  padding: 10px;
+  border-radius: 18px;
+  background: linear-gradient(165deg, rgba(12, 18, 32, 0.94), rgba(6, 10, 18, 0.96));
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  backdrop-filter: blur(18px) saturate(1.15);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+}
+
+.ptz-pad-open.moving {
+  border-color: rgba(56, 189, 248, 0.45);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(56, 189, 248, 0.2);
 }
 
 .ptz-meta {
   display: flex;
+  align-items: flex-start;
   justify-content: space-between;
-  font-size: 10px;
-  font-family: var(--font-data);
-  letter-spacing: 0.06em;
-  opacity: 0.75;
+  gap: 8px;
   margin-bottom: 8px;
+}
+
+.ptz-meta-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ptz-meta-text strong {
+  font-size: 11px;
+  font-weight: 750;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ptz-meta-text small {
+  font-size: 9px;
+  letter-spacing: 0.02em;
+  color: rgba(148, 163, 184, 0.9);
+}
+
+.ptz-collapse {
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(255, 255, 255, 0.04);
+  color: #cbd5e1;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.ptz-collapse:hover {
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .ptz-cross {
   display: grid;
-  grid-template-columns: repeat(3, 36px);
-  grid-template-rows: repeat(3, 36px);
-  gap: 4px;
+  grid-template-columns: repeat(3, minmax(36px, 1fr));
+  grid-template-rows: repeat(3, 38px);
+  gap: 5px;
   justify-content: center;
 }
 
 .ptz-btn {
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.05);
   border: 1px solid rgba(255, 255, 255, 0.08);
   color: inherit;
-  font-size: 12px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease, transform 0.08s ease;
 }
 
-.ptz-btn:hover {
-  background: rgba(56, 189, 248, 0.2);
+.ptz-btn:hover:not(:disabled) {
+  background: rgba(56, 189, 248, 0.18);
   border-color: rgba(56, 189, 248, 0.35);
+}
+
+.ptz-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.ptz-btn:active:not(:disabled),
+.ptz-zoom button:active:not(:disabled) {
+  background: rgba(56, 189, 248, 0.38);
+  border-color: rgba(56, 189, 248, 0.55);
+  transform: scale(0.96);
+  color: #f8fafc;
 }
 
 .ptz-btn.n { grid-column: 2; grid-row: 1; }
 .ptz-btn.w { grid-column: 1; grid-row: 2; }
-.ptz-btn.home { grid-column: 2; grid-row: 2; font-size: 14px; }
+.ptz-btn.home { grid-column: 2; grid-row: 2; font-size: 15px; }
 .ptz-btn.e { grid-column: 3; grid-row: 2; }
 .ptz-btn.s { grid-column: 2; grid-row: 3; }
 
@@ -3389,17 +3496,28 @@ html[data-ui="light"] .side-panel-bridge {
 }
 
 .ptz-zoom button {
-  height: 34px;
+  height: 36px;
   border-radius: 12px;
   background: rgba(37, 99, 235, 0.28);
   border: 1px solid rgba(96, 165, 250, 0.35);
   color: #f8fafc;
   font-size: 18px;
   font-weight: 700;
+  cursor: pointer;
 }
 
-.ptz-zoom button:hover {
+.ptz-zoom button:hover:not(:disabled) {
   background: rgba(37, 99, 235, 0.45);
+}
+
+.ptz-zoom button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.ptz-zoom button.on {
+  background: rgba(56, 189, 248, 0.45);
+  border-color: rgba(125, 211, 252, 0.55);
 }
 
 .dock-bar {
@@ -4237,9 +4355,17 @@ html[data-ui="light"] .side-panel-bridge {
   grid-template-rows: 1fr;
 }
 
+/* Split (yarı harita): 2 kanal alt alta */
 .cam-wall-grid.layout-2 {
   grid-template-columns: 1fr;
   grid-template-rows: 1fr 1fr;
+}
+
+/* Tam kamera: 2 kanal yan yana */
+.stage-swap.view-camera .cam-wall-grid.layout-2,
+.stage-swap.view-camera-map-pip .cam-wall-grid.layout-2 {
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr;
 }
 
 .cam-wall-grid.layout-4 {
@@ -4269,12 +4395,15 @@ html[data-ui="light"] .side-panel-bridge {
 .cam-cell-feed {
   position: absolute;
   inset: 0;
+  background: #05080e;
 }
 
 .cam-cell-feed .camera-live {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
+  object-position: center;
+  background: #05080e;
 }
 
 .cam-cell-empty {

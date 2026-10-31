@@ -146,21 +146,32 @@ function createCameraStreamProxy({ port = 18766 } = {}) {
 
     log.info(`ffmpeg start ${key}`, String(url).replace(/:[^:@/]+@/, ":***@").slice(0, 120));
 
+    // Low-latency MJPEG for live PTZ feel (nobuffer + higher fps)
     const args = [
       "-hide_banner",
       "-loglevel",
       "error",
+      "-fflags",
+      "nobuffer+discardcorrupt",
+      "-flags",
+      "low_delay",
+      "-probesize",
+      "32",
+      "-analyzeduration",
+      "0",
       "-rtsp_transport",
       "tcp",
       "-i",
       url,
       "-an",
+      "-vf",
+      "setpts=PTS-STARTPTS",
       "-f",
       "mpjpeg",
       "-q:v",
-      "7",
+      "5",
       "-r",
-      "8",
+      "12",
       "pipe:1",
     ];
     const proc = spawn(ffmpegPath, args, { stdio: ["ignore", "pipe", "pipe"] });

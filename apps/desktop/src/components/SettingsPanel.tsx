@@ -139,12 +139,12 @@ export function SettingsPanel({
                   >
                     <span className={`cam-layout-glyph g${n}`} aria-hidden />
                     <strong>{n}</strong>
-                    <small>{n === 1 ? "tek" : n === 2 ? "alt alta" : "ızgara"}</small>
+                    <small>{n === 1 ? "tek" : n === 2 ? "2 kanal" : "ızgara"}</small>
                   </button>
                 ))}
               </div>
               <p className="settings-muted tight">
-                Küçük PiP’de hep 1 kanal. Büyük / split’te {camLayout.layout} kanal.
+                PiP: 1 kanal · Split: 2 alt alta · Tam kamera: 2 yan yana · 4: ızgara
               </p>
             </section>
 

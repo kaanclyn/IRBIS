@@ -339,36 +339,62 @@ function createOnvifService({ registry, streamProxy, broadcast } = {}) {
     return registry.snapshot();
   }
 
-  async function ptz({ id, action, speed = 0.4 }) {
+  async function ptzStop(cam) {
+    await promisifyCam(cam, "stop", { panTilt: true, zoom: true });
+  }
+
+  /**
+   * Joystick-style PTZ: continuousMove while held, explicit "stop" on release.
+   * (Do NOT auto-stop — ODM-style hold-to-pan.)
+   */
+  async function ptz({ id, action, speed = 0.55 }) {
     const cam = await ensureSession(id);
-    const sp = Math.min(1, Math.max(0.05, Number(speed) || 0.4));
+    const sp = Math.min(1, Math.max(0.08, Number(speed) || 0.55));
+
     if (action === "stop") {
-      await promisifyCam(cam, "stop", { panTilt: true, zoom: true });
-      return { ok: true };
-    }
-    if (action === "home") {
       try {
-        await promisifyCam(cam, "gotoHomePosition", {});
-      } catch {
-        await promisifyCam(cam, "stop", { panTilt: true, zoom: true });
+        await ptzStop(cam);
+      } catch (err) {
+        log.warn("ptz stop", err?.message || err);
       }
       return { ok: true };
     }
-    const velocity = { x: 0, y: 0, zoom: 0 };
+
+    if (action === "home") {
+      try {
+        await ptzStop(cam);
+      } catch {
+        /* ignore */
+      }
+      try {
+        await promisifyCam(cam, "gotoHomePosition", {});
+      } catch (err) {
+        log.warn("ptz home", err?.message || err);
+        return { ok: false, error: String(err?.message || err) };
+      }
+      return { ok: true };
+    }
+
+    /** @type {{ x?: number, y?: number, zoom?: number, onlySendPanTilt?: boolean, onlySendZoom?: boolean }} */
+    const velocity = {};
     switch (action) {
       case "left":
         velocity.x = -sp;
+        velocity.y = 0;
         velocity.onlySendPanTilt = true;
         break;
       case "right":
         velocity.x = sp;
+        velocity.y = 0;
         velocity.onlySendPanTilt = true;
         break;
       case "up":
+        velocity.x = 0;
         velocity.y = sp;
         velocity.onlySendPanTilt = true;
         break;
       case "down":
+        velocity.x = 0;
         velocity.y = -sp;
         velocity.onlySendPanTilt = true;
         break;
@@ -383,12 +409,14 @@ function createOnvifService({ registry, streamProxy, broadcast } = {}) {
       default:
         throw new Error(`Bilinmeyen PTZ: ${action}`);
     }
-    await promisifyCam(cam, "continuousMove", velocity);
-    // auto-stop after short burst so UI buttons feel like clicks
-    setTimeout(() => {
-      promisifyCam(cam, "stop", { panTilt: true, zoom: true }).catch(() => {});
-    }, 350);
-    return { ok: true };
+
+    try {
+      await promisifyCam(cam, "continuousMove", velocity);
+      return { ok: true };
+    } catch (err) {
+      log.warn(`ptz ${action}`, err?.message || err);
+      return { ok: false, error: String(err?.message || err) };
+    }
   }
 
   async function hydrateProxies() {

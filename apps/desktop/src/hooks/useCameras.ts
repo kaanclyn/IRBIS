@@ -63,9 +63,15 @@ export function useCameras() {
   }, []);
 
   const ptz = useCallback(
-    async (action: "up" | "down" | "left" | "right" | "zoomin" | "zoomout" | "home" | "stop") => {
-      if (!active?.id) return { ok: false as const, error: "Kamera yok" };
-      return window.irbis?.cameraPtz?.({ id: active.id, action }) ?? { ok: false, error: "IPC yok" };
+    async (
+      action: "up" | "down" | "left" | "right" | "zoomin" | "zoomout" | "home" | "stop",
+      opts?: { id?: string; speed?: number },
+    ) => {
+      const id = opts?.id ?? active?.id;
+      if (!id) return { ok: false as const, error: "Kamera yok" };
+      return (
+        window.irbis?.cameraPtz?.({ id, action, speed: opts?.speed }) ?? { ok: false, error: "IPC yok" }
+      );
     },
     [active?.id],
   );

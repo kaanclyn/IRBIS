@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChartMap, type ChartFeatureHit } from "./chart/ChartMap";
 import { storeScheme, type ChartScheme } from "./chart/scheme";
 import { useOwnShip } from "./hooks/useOwnShip";
@@ -10,6 +10,7 @@ import { AisShipIcon, RadarIcon, RadarIconAB, RadarIconInfo, RadarIconMarpa } fr
 import { MarineTopbar, formatCoordParts } from "./components/MarineTopbar";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { CameraWall } from "./components/CameraWall";
+import { PtzPad, type PtzDir } from "./components/PtzPad";
 import { loadCamLayout, saveCamLayout, type CamLayoutState } from "./camera/cameraLayout";
 
 function formatCoord(lat: number, lon: number): string {
@@ -63,7 +64,6 @@ type CtrlId =
 type RadarLetter = "A" | "B";
 /** Harita → kamera PiP → split → kamera → harita PiP → … */
 type ViewMode = "map" | "map-cam-pip" | "split" | "camera" | "camera-map-pip";
-type PtzDir = "up" | "down" | "left" | "right" | "home" | "zoomin" | "zoomout";
 
 const VIEW_ORDER: ViewMode[] = ["map", "map-cam-pip", "split", "camera", "camera-map-pip"];
 
@@ -226,38 +226,48 @@ export function App() {
   const cameraIsPip = viewMode === "map-cam-pip";
   const mapIsPip = viewMode === "camera-map-pip";
 
-  const runPtz = (dir: PtzDir) => {
-    if (cams.active?.capabilities.ptz) {
-      void cams.ptz(dir === "home" ? "home" : dir).then((r) => {
-        if (!r?.ok) setStatusNote(r?.error || "PTZ hata");
-        else setStatusNote(`PTZ · ${dir} · ${cams.active?.name ?? "CAM"}`);
-      });
-      if (dir === "home") {
-        setCamZoom(1);
-        setCamCursor(false);
-        setCamAisLock(false);
+  const ptzCamIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    ptzCamIdRef.current = focusedCam?.id ?? cams.active?.id ?? null;
+  }, [focusedCam?.id, cams.active?.id]);
+
+  const ptzHoldStart = useCallback(
+    (dir: Exclude<PtzDir, "home">) => {
+      const id = ptzCamIdRef.current;
+      const cam = (id ? cams.cameras.find((c) => c.id === id) : null) ?? focusedCam ?? cams.active;
+      if (!cam?.capabilities.ptz) {
+        if (dir === "zoomin") setCamZoom((z) => Math.min(8, +(z + 0.5).toFixed(1)));
+        else if (dir === "zoomout") setCamZoom((z) => Math.max(1, +(z - 0.5).toFixed(1)));
+        return;
       }
+      ptzCamIdRef.current = cam.id;
+      // Hold sırasında setActive çağırma — re-render stop’u tetikliyordu
+      void cams.ptz(dir, { id: cam.id });
+    },
+    [cams, focusedCam],
+  );
+
+  const ptzHoldEnd = useCallback(() => {
+    const id = ptzCamIdRef.current;
+    if (!id) return;
+    void cams.ptz("stop", { id });
+  }, [cams]);
+
+  const ptzHome = useCallback(() => {
+    const cam = focusedCam ?? cams.active;
+    setCamZoom(1);
+    setCamCursor(false);
+    setCamAisLock(false);
+    if (!cam?.capabilities.ptz) {
+      setStatusNote("Kamera ana");
       return;
     }
-    switch (dir) {
-      case "zoomin":
-        setCamZoom((z) => Math.min(8, +(z + 0.5).toFixed(1)));
-        setStatusNote(`Dijital zoom · ${Math.min(8, camZoom + 0.5).toFixed(1)}×`);
-        break;
-      case "zoomout":
-        setCamZoom((z) => Math.max(1, +(z - 0.5).toFixed(1)));
-        setStatusNote(`Dijital zoom · ${Math.max(1, camZoom - 0.5).toFixed(1)}×`);
-        break;
-      case "home":
-        setCamZoom(1);
-        setCamCursor(false);
-        setCamAisLock(false);
-        setStatusNote("Kamera ana pozisyon");
-        break;
-      default:
-        setStatusNote(`PTZ · ${dir} (ONVIF kamera yok)`);
-    }
-  };
+    if (cam.id !== cams.activeId) void cams.setActive(cam.id);
+    void cams.ptz("home", { id: cam.id }).then((r) => {
+      if (r && "ok" in r && !r.ok) setStatusNote(r.error || "PTZ home hata");
+      else setStatusNote(`PTZ home · ${cam.name}`);
+    });
+  }, [cams, focusedCam]);
 
   const runCtrl = (id: CtrlId) => {
     switch (id) {
@@ -299,7 +309,7 @@ export function App() {
         break;
       }
       case "camHome":
-        runPtz("home");
+        ptzHome();
         break;
       case "camVideoTrack":
         setCamVideoTrack((v) => {
@@ -439,10 +449,11 @@ export function App() {
 
           {cameraVisible ? (
             <PtzPad
-              onCommand={runPtz}
               label={focusedCam?.name ?? `CAM ${camIndex + 1}`}
-              zoom={camZoom}
               ptzReady={!!focusedCam?.capabilities.ptz}
+              onHoldStart={ptzHoldStart}
+              onHoldEnd={ptzHoldEnd}
+              onHome={ptzHome}
             />
           ) : null}
 
@@ -644,35 +655,4 @@ function ViewModeIcon({ mode }: { mode: ViewMode }) {
   }
 }
 
-function PtzPad({
-  onCommand,
-  label,
-  zoom,
-  ptzReady,
-}: {
-  onCommand: (d: PtzDir) => void;
-  label: string;
-  zoom: number;
-  ptzReady?: boolean;
-}) {
-  return (
-    <div className="ptz-pad" onClick={(e) => e.stopPropagation()} onPointerDown={(e) => e.stopPropagation()}>
-      <div className="ptz-meta">
-        <span>{label}</span>
-        <span>{ptzReady ? "ONVIF" : `${zoom.toFixed(1)}×`}</span>
-      </div>
-      <div className="ptz-cross">
-        <button type="button" className="ptz-btn n" aria-label="Yukarı" onClick={() => onCommand("up")}>▲</button>
-        <button type="button" className="ptz-btn w" aria-label="Sol" onClick={() => onCommand("left")}>◀</button>
-        <button type="button" className="ptz-btn home" aria-label="Ana" onClick={() => onCommand("home")}>⌂</button>
-        <button type="button" className="ptz-btn e" aria-label="Sağ" onClick={() => onCommand("right")}>▶</button>
-        <button type="button" className="ptz-btn s" aria-label="Aşağı" onClick={() => onCommand("down")}>▼</button>
-      </div>
-      <div className="ptz-zoom">
-        <button type="button" aria-label="Zoom +" onClick={() => onCommand("zoomin")}>+</button>
-        <button type="button" aria-label="Zoom −" onClick={() => onCommand("zoomout")}>−</button>
-      </div>
-    </div>
-  );
-}
 
