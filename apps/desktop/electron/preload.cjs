@@ -4,9 +4,21 @@ contextBridge.exposeInMainWorld("irbis", {
   getAppInfo: () => ipcRenderer.invoke("irbis:get-app-info"),
   getChartConfig: () => ipcRenderer.invoke("irbis:get-chart-config"),
   getChartLibrary: () => ipcRenderer.invoke("irbis:get-chart-library"),
+  getMapCatalog: () => ipcRenderer.invoke("irbis:get-map-catalog"),
+  setMapEngine: (engine) => ipcRenderer.invoke("irbis:set-map-engine", engine),
+  setNautilusCell: (cellId) => ipcRenderer.invoke("irbis:set-nautilus-cell", cellId),
+  nautilusRender: (payload) => ipcRenderer.invoke("irbis:nautilus-render", payload),
+  nautilusSetViewport: (payload) => ipcRenderer.invoke("irbis:nautilus-set-viewport", payload),
+  nautilusPick: (payload) => ipcRenderer.invoke("irbis:nautilus-pick", payload),
+  nautilusRescan: () => ipcRenderer.invoke("irbis:nautilus-rescan"),
   pickEncFolder: () => ipcRenderer.invoke("irbis:pick-enc-folder"),
   setActiveCell: (name) => ipcRenderer.invoke("irbis:set-active-cell", name),
   rescanCharts: () => ipcRenderer.invoke("irbis:rescan-charts"),
+  onMapEngineChanged: (handler) => {
+    const listener = (_event, payload) => handler(payload);
+    ipcRenderer.on("irbis:map-engine-changed", listener);
+    return () => ipcRenderer.removeListener("irbis:map-engine-changed", listener);
+  },
   getOwnShip: () => ipcRenderer.invoke("irbis:get-ownship"),
   getAis: () => ipcRenderer.invoke("irbis:get-ais"),
   windowMinimize: () => ipcRenderer.invoke("irbis:window-minimize"),

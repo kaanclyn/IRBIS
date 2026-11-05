@@ -8,6 +8,8 @@ const { startNavionicsServer } = require("./navionicsServer.cjs");
 const { createCameraRegistry } = require("./cameraRegistry.cjs");
 const { createCameraStreamProxy } = require("./cameraStreamProxy.cjs");
 const { createOnvifService } = require("./onvifService.cjs");
+const { createNautilusBridge } = require("./nautilusBridge.cjs");
+const { createMapEngineStore } = require("./mapEngineStore.cjs");
 const { log } = require("./log.cjs");
 
 /** @type {BrowserWindow | null} */
@@ -26,6 +28,10 @@ let cameras = null;
 let camProxy = null;
 /** @type {ReturnType<typeof createOnvifService> | null} */
 let onvif = null;
+/** @type {ReturnType<typeof createNautilusBridge> | null} */
+let nautilus = null;
+/** @type {ReturnType<typeof createMapEngineStore> | null} */
+let mapEngine = null;
 
 function ensureChartLibrary() {
   if (!chartLib) chartLib = createChartLibrary();
@@ -195,6 +201,18 @@ app.whenReady().then(async () => {
     log.error("onvif camera service failed", err);
   }
 
+  try {
+    mapEngine = createMapEngineStore();
+    nautilus = createNautilusBridge({
+      port: Number(process.env.IRBIS_NAUTILUS_PORT || 18768),
+    });
+    nautilus.rescan();
+    void nautilus.startServer().catch((err) => log.warn("nautilus server", err));
+  } catch (err) {
+    log.error("nautilus bridge failed", err);
+    nautilus = null;
+  }
+
   createWindow();
 
   app.on("activate", () => {
@@ -224,6 +242,13 @@ app.on("window-all-closed", () => {
     /* ignore */
   }
   navionics = null;
+  try {
+    nautilus?.stop?.();
+  } catch {
+    /* ignore */
+  }
+  nautilus = null;
+  mapEngine = null;
   if (chartServer) {
     chartServer.server.close();
     chartServer = null;
@@ -262,10 +287,40 @@ ipcMain.handle("irbis:get-chart-config", async () => {
   const lib = ensureChartLibrary();
   const cfg = lib.getActiveConfig(svc.baseUrl);
   const navOk = !!(navionics?.running && navionics.tileUrlTemplate);
+  const prefs = mapEngine?.get?.() ?? { engine: "navionics", nautilusCellId: null };
+  const wantNautilus = prefs.engine === "nautilus" && !!nautilus;
+
+  if (wantNautilus) {
+    const cells = nautilus.list();
+    const active =
+      cells.find((c) => c.id === prefs.nautilusCellId) || cells[0] || null;
+    return {
+      ...cfg,
+      mapMode: "nautilus",
+      mapEngine: "nautilus",
+      navionics: null,
+      nautilus: {
+        cellId: active?.id ?? null,
+        cells,
+        status: nautilus.status(),
+        cache: nautilus.cacheStats(),
+      },
+      cellName: active?.id || "NAUTILUS",
+      bakeReady: true,
+      readyCells: [],
+      warning: active
+        ? `Nautilus ENC · ${active.id} · cache ${nautilus.cacheStats().files} png`
+        : "Nautilus · ENC hücre yok",
+      hideWorldBasemap: true,
+      center: [61.0, -32.49],
+      zoom: 12,
+    };
+  }
+
   return {
     ...cfg,
-    // Interim naval map: offline Navionics from Documents/NDataReader/bizim-harita
     mapMode: navOk ? "navionics" : cfg.mapMode || "s57-lab",
+    mapEngine: "navionics",
     navionics: navOk
       ? {
           tileUrl: navionics.tileUrlTemplate,
@@ -275,23 +330,101 @@ ipcMain.handle("irbis:get-chart-config", async () => {
           cache: navionics.cache,
         }
       : null,
-    // Prefer Turkey overview when Navionics is the primary chart
+    nautilus: nautilus
+      ? { cells: nautilus.list(), status: nautilus.status(), cache: nautilus.cacheStats() }
+      : null,
     ...(navOk
       ? {
-          // Default view: Tuzla / İzmit Körfezi (AISveGPS.pcapng sim scenario)
           center: [29.2768, 40.82281],
           zoom: 12.2,
           worldCenter: [29.2768, 40.82281],
           worldZoom: 11.5,
           cellName: "NAVIONICS",
           bakeReady: true,
-          // Keep NOAA quilt off by default under Navionics (S-57 lab still in library)
           readyCells: [],
           warning: `Navionics · sim Tuzla (pcap) · ${navionics.cache?.count ?? "?"} karo`,
           hideWorldBasemap: true,
         }
       : {}),
   };
+});
+
+ipcMain.handle("irbis:get-map-catalog", () => {
+  const prefs = mapEngine?.get?.() ?? { engine: "navionics", nautilusCellId: null };
+  const navOk = !!(navionics?.running && navionics.tileUrlTemplate);
+  return {
+    engine: prefs.engine,
+    nautilusCellId: prefs.nautilusCellId,
+    sources: [
+      {
+        id: "navionics",
+        label: "Navionics (offline karo)",
+        available: navOk,
+        detail: navOk
+          ? `${navionics.cacheDir} · ~${navionics.cache?.count ?? "?"} tile`
+          : navionics?.error || "Navionics yok",
+      },
+      {
+        id: "nautilus",
+        label: "Nautilus ENC (SevenCs)",
+        available: !!nautilus && nautilus.list().length > 0,
+        detail: nautilus
+          ? `${nautilus.list().length} hücre · cache ${nautilus.cacheStats().files} png`
+          : "Nautilus bridge yok",
+      },
+    ],
+    nautilusCells: nautilus?.list() ?? [],
+    nautilusStatus: nautilus?.status() ?? null,
+    navionics: navOk
+      ? { cacheDir: navionics.cacheDir, cache: navionics.cache, offlineOnly: navionics.offlineOnly }
+      : null,
+  };
+});
+
+ipcMain.handle("irbis:set-map-engine", (_e, engine) => {
+  const state = mapEngine?.setEngine(String(engine || "navionics"));
+  broadcast("irbis:map-engine-changed", state);
+  broadcast("irbis:chart-changed", { engine: state?.engine });
+  return { ok: true, ...state };
+});
+
+ipcMain.handle("irbis:set-nautilus-cell", (_e, cellId) => {
+  const state = mapEngine?.setNautilusCell(String(cellId || ""));
+  broadcast("irbis:map-engine-changed", state);
+  broadcast("irbis:chart-changed", { engine: "nautilus", cellId });
+  return { ok: true, ...state };
+});
+
+ipcMain.handle("irbis:nautilus-render", async (_e, payload) => {
+  if (!nautilus) throw new Error("Nautilus bridge yok");
+  const cellId = payload?.cellId || mapEngine?.get()?.nautilusCellId;
+  return nautilus.ensureRender(cellId, {
+    width: payload?.width,
+    height: payload?.height,
+    dpi: payload?.dpi,
+    north: payload?.north,
+    south: payload?.south,
+    west: payload?.west,
+    east: payload?.east,
+    bbox: payload?.bbox,
+  });
+});
+
+ipcMain.handle("irbis:nautilus-set-viewport", async (_e, payload) => {
+  if (!nautilus) throw new Error("Nautilus bridge yok");
+  const cellId = payload?.cellId || mapEngine?.get()?.nautilusCellId;
+  return nautilus.setViewport({ ...payload, cellId });
+});
+
+ipcMain.handle("irbis:nautilus-pick", async (_e, payload) => {
+  if (!nautilus) throw new Error("Nautilus bridge yok");
+  const cellId = payload?.cellId || mapEngine?.get()?.nautilusCellId;
+  return nautilus.pickFeature({ ...payload, cellId });
+});
+
+ipcMain.handle("irbis:nautilus-rescan", () => {
+  if (!nautilus) return [];
+  return nautilus.rescan();
 });
 
 ipcMain.handle("irbis:get-chart-library", () => ensureChartLibrary().snapshot());

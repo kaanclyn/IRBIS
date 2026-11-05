@@ -30,3 +30,9 @@ LIB/
 # Ruflo local secrets and runtime data
 .env.local
 .env.*.local
+
+# Native / PoC build trees and smoke outputs
+native/**/build/
+native/**/smoke/
+maps/poc/**/build/
+maps/poc/out/

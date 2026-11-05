@@ -10,6 +10,7 @@ import { AisShipIcon, RadarIcon, RadarIconAB, RadarIconInfo, RadarIconMarpa } fr
 import { MarineTopbar, formatCoordParts } from "./components/MarineTopbar";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { CameraWall } from "./components/CameraWall";
+import { NautilusViewport } from "./components/NautilusViewport";
 import { PtzPad, type PtzDir } from "./components/PtzPad";
 import { loadCamLayout, saveCamLayout, type CamLayoutState } from "./camera/cameraLayout";
 
@@ -80,6 +81,8 @@ export function App() {
   const [pointer, setPointer] = useState<{ lat: number; lon: number } | null>(null);
   const [now, setNow] = useState(() => new Date());
   const [chartReload, setChartReload] = useState(0);
+  const [mapEngine, setMapEngine] = useState<"navionics" | "nautilus">("navionics");
+  const [nautilusCellId, setNautilusCellId] = useState<string | null>(null);
   const [maximized, setMaximized] = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
   const [scheme, setScheme] = useState<ChartScheme>("night");
@@ -155,6 +158,21 @@ export function App() {
 
   useEffect(() => {
     const unsub = window.irbis?.onChartChanged?.(() => {
+      setChartReload((n) => n + 1);
+    });
+    return () => unsub?.();
+  }, []);
+
+  useEffect(() => {
+    const syncEngine = () => {
+      void window.irbis?.getMapCatalog?.().then((c) => {
+        setMapEngine(c.engine === "nautilus" ? "nautilus" : "navionics");
+        setNautilusCellId(c.nautilusCellId ?? c.nautilusCells?.[0]?.id ?? null);
+      });
+    };
+    syncEngine();
+    const unsub = window.irbis?.onMapEngineChanged?.(() => {
+      syncEngine();
       setChartReload((n) => n + 1);
     });
     return () => unsub?.();
@@ -385,20 +403,48 @@ export function App() {
           ) : null}
 
           <div className="stage-pane stage-map" data-role={mapIsPip ? "pip" : "primary"} hidden={!mapVisible}>
-            <ChartMap
-              onMove={onMove}
-              onCursorMove={onCursorMove}
-              ownShip={own.position}
-              headingDeg={own.state?.headingDegTrue?.value}
-              aisTargets={ais.targets}
-              aisVisible={aisOn}
-              radarVisible={radarOn}
-              radarInfo={radarInfo}
-              radarArpa={radarArpa}
-              reloadToken={chartReload}
-              scheme={scheme}
-              onFeatureQuery={onFeatureQuery}
-            />
+            {mapEngine === "nautilus" ? (
+              <NautilusViewport
+                cellId={nautilusCellId}
+                reloadToken={chartReload}
+                ownShip={own.position}
+                headingDeg={own.state?.headingDegTrue?.value}
+                aisTargets={ais.targets}
+                aisVisible={aisOn}
+                radarVisible={radarOn}
+                onCursorMove={onCursorMove}
+                onFeatureQuery={(hit) => {
+                  if (!hit) {
+                    setFeatureHit(null);
+                    return;
+                  }
+                  setFeatureHit({
+                    layerId: hit.title || "nautilus-pick",
+                    sourceLayer: "Nautilus Pick",
+                    properties: {
+                      ...hit.props,
+                      ...(hit.lat != null ? { lat: hit.lat } : {}),
+                      ...(hit.lon != null ? { lon: hit.lon } : {}),
+                    },
+                  });
+                }}
+              />
+            ) : (
+              <ChartMap
+                onMove={onMove}
+                onCursorMove={onCursorMove}
+                ownShip={own.position}
+                headingDeg={own.state?.headingDegTrue?.value}
+                aisTargets={ais.targets}
+                aisVisible={aisOn}
+                radarVisible={radarOn}
+                radarInfo={radarInfo}
+                radarArpa={radarArpa}
+                reloadToken={chartReload}
+                scheme={scheme}
+                onFeatureQuery={onFeatureQuery}
+              />
+            )}
             {mapIsPip ? (
               <button type="button" className="pip-hit" aria-label="Görünümü değiştir" onClick={cycleViewMode}>
                 <span>HARİTA</span>
@@ -596,6 +642,7 @@ export function App() {
             onCamLayoutChange={updateCamLayout}
             onClose={() => setPanelOpen(false)}
             onNote={setStatusNote}
+            onMapEngineChange={() => setChartReload((n) => n + 1)}
           />
         ) : null}
       </div>

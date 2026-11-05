@@ -1,4 +1,4 @@
-﻿:root,
+:root,
 html[data-ui="light"] {
   color-scheme: light;
   --bg: #e8eef4;
@@ -4092,6 +4092,271 @@ html[data-ui="light"] .side-panel-bridge {
   border-color: rgba(56, 189, 248, 0.5);
   background: rgba(56, 189, 248, 0.14);
   color: #f8fafc;
+}
+
+.map-engine-picks {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
+}
+
+.map-engine-pick {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(0, 0, 0, 0.22);
+  color: #cbd5e1;
+  cursor: pointer;
+  text-align: left;
+}
+
+.map-engine-pick strong {
+  font-size: 13px;
+}
+
+.map-engine-pick small {
+  font-size: 10px;
+  opacity: 0.72;
+  line-height: 1.35;
+}
+
+.map-engine-pick.active {
+  border-color: rgba(56, 189, 248, 0.5);
+  background: rgba(56, 189, 248, 0.14);
+  color: #f8fafc;
+}
+
+.map-engine-pick:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.map-cell-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.map-cell-row {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: rgba(0, 0, 0, 0.18);
+  color: #e2e8f0;
+  cursor: pointer;
+  text-align: left;
+}
+
+.map-cell-row small {
+  opacity: 0.65;
+  font-size: 10px;
+}
+
+.map-cell-row.active {
+  border-color: rgba(52, 211, 153, 0.45);
+  background: rgba(52, 211, 153, 0.12);
+}
+
+.nautilus-viewport {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: #0b1220;
+}
+
+.nautilus-viewport-chrome {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  background: linear-gradient(180deg, rgba(2, 6, 23, 0.88), rgba(2, 6, 23, 0.35) 70%, transparent);
+  border-bottom: none;
+  color: #e2e8f0;
+  font-size: 12px;
+  z-index: 4;
+  pointer-events: none;
+}
+
+.nautilus-viewport-chrome .nautilus-viewport-actions {
+  pointer-events: auto;
+}
+
+.nautilus-viewport-chrome span {
+  opacity: 0.75;
+  font-size: 11px;
+  flex: 1;
+}
+
+.nautilus-viewport-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.nautilus-viewport-actions button {
+  min-width: 28px;
+  height: 24px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: rgba(15, 23, 42, 0.9);
+  color: #e2e8f0;
+  border-radius: 4px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.nautilus-viewport-actions button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.nautilus-viewport-stage {
+  flex: 1;
+  position: absolute;
+  inset: 0;
+  min-height: 0;
+  overflow: hidden;
+  cursor: grab;
+  touch-action: none;
+  background: #0b1220;
+}
+
+.nautilus-viewport-stage:active {
+  cursor: grabbing;
+}
+
+.nautilus-layer {
+  position: absolute;
+  inset: 0;
+  transform-origin: center center;
+  will-change: transform;
+}
+
+.nautilus-viewport-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  image-rendering: auto;
+  user-select: none;
+  pointer-events: none;
+}
+
+.nautilus-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.nautilus-marker {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.nautilus-marker-glyph {
+  width: 0;
+  height: 0;
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+  border-bottom: 14px solid #38bdf8;
+  filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.7));
+}
+
+.nautilus-marker-own .nautilus-marker-glyph {
+  border-bottom-color: #fbbf24;
+}
+
+.nautilus-marker em {
+  font-style: normal;
+  font-size: 9px;
+  color: #e2e8f0;
+  background: rgba(2, 6, 23, 0.72);
+  padding: 0 3px;
+  border-radius: 2px;
+  white-space: nowrap;
+  max-width: 90px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nautilus-radar-ring {
+  position: absolute;
+  width: 72px;
+  height: 72px;
+  margin: -36px 0 0 -36px;
+  border: 1px solid rgba(52, 211, 153, 0.55);
+  border-radius: 50%;
+  box-shadow: 0 0 0 12px rgba(52, 211, 153, 0.08);
+}
+
+.nautilus-pick-dot {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  margin: -5px 0 0 -5px;
+  border-radius: 50%;
+  background: #f472b6;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.7);
+}
+
+.nautilus-busy {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  z-index: 3;
+  font-size: 11px;
+  color: #cbd5e1;
+  background: rgba(2, 6, 23, 0.75);
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+.nautilus-cache-badge {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  z-index: 3;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #86efac;
+  background: rgba(6, 78, 59, 0.75);
+  padding: 3px 8px;
+  border-radius: 4px;
+}
+
+.nautilus-viewport-empty {
+  color: #94a3b8;
+  font-size: 13px;
+  padding: 24px;
+  text-align: center;
+}
+
+.nautilus-viewport-empty.error {
+  color: #fca5a5;
 }
 
 .cam-layout-glyph {

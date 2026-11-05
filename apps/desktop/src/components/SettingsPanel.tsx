@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { useCameras } from "../hooks/useCameras";
 import type { CamLayout, CamLayoutState, CamSlot } from "../camera/cameraLayout";
 import { CAM_DRAG_MIME } from "../camera/cameraLayout";
 import { CamDragChip } from "./CameraWall";
 
 export type SettingsTab = "seyir" | "kamera" | "radar" | "genel";
+type MapEngine = "navionics" | "nautilus";
 
 type DiscoverHit = {
   hostname: string;
@@ -27,12 +28,14 @@ export function SettingsPanel({
   onCamLayoutChange,
   onClose,
   onNote,
+  onMapEngineChange,
 }: {
   cams: Cams;
   camLayout: CamLayoutState;
   onCamLayoutChange: (next: CamLayoutState) => void;
   onClose: () => void;
   onNote: (msg: string) => void;
+  onMapEngineChange?: () => void;
 }) {
   const [tab, setTab] = useState<SettingsTab>("seyir");
   const [host, setHost] = useState("");
@@ -44,6 +47,45 @@ export function SettingsPanel({
   const [discovered, setDiscovered] = useState<DiscoverHit[] | null>(null);
   const [selectedHit, setSelectedHit] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
+  const [mapCatalog, setMapCatalog] = useState<Awaited<
+    ReturnType<NonNullable<Window["irbis"]>["getMapCatalog"]>
+  > | null>(null);
+  const [mapBusy, setMapBusy] = useState(false);
+
+  const refreshCatalog = () => {
+    void window.irbis?.getMapCatalog?.().then((c) => setMapCatalog(c)).catch(() => setMapCatalog(null));
+  };
+
+  useEffect(() => {
+    refreshCatalog();
+  }, []);
+
+  const pickEngine = (engine: MapEngine) => {
+    setMapBusy(true);
+    void window.irbis
+      ?.setMapEngine?.(engine)
+      .then(() => {
+        onNote(engine === "nautilus" ? "Harita · Nautilus ENC" : "Harita · Navionics");
+        refreshCatalog();
+        onMapEngineChange?.();
+      })
+      .catch((e: { message?: string }) => onNote(String(e?.message || e)))
+      .finally(() => setMapBusy(false));
+  };
+
+  const pickCell = (cellId: string) => {
+    setMapBusy(true);
+    void window.irbis
+      ?.setNautilusCell?.(cellId)
+      .then(() => window.irbis?.setMapEngine?.("nautilus"))
+      .then(() => {
+        onNote(`Nautilus hücre · ${cellId}`);
+        refreshCatalog();
+        onMapEngineChange?.();
+      })
+      .catch((e: { message?: string }) => onNote(String(e?.message || e)))
+      .finally(() => setMapBusy(false));
+  };
 
   const setLayout = (layout: CamLayout) => onCamLayoutChange({ ...camLayout, layout });
 
@@ -115,9 +157,89 @@ export function SettingsPanel({
 
       <div className="bridge-body settings-body">
         {tab === "seyir" ? (
-          <div className="settings-pane settings-pane-empty">
-            <p className="settings-empty-title">Seyir</p>
-            <p className="settings-empty-hint">Harita, AIS ve seyir tercihleri burada olacak.</p>
+          <div className="settings-pane settings-cam">
+            <section className="settings-card settings-card-tight">
+              <div className="settings-card-head">
+                <span>Harita kaynağı</span>
+                <em>{mapBusy ? "…" : mapCatalog?.engine ?? "—"}</em>
+              </div>
+              <div className="map-engine-picks">
+                {(mapCatalog?.sources ?? [
+                  { id: "navionics", label: "Navionics", available: false, detail: "yükleniyor" },
+                  { id: "nautilus", label: "Nautilus ENC", available: false, detail: "yükleniyor" },
+                ]).map((src) => (
+                  <button
+                    key={src.id}
+                    type="button"
+                    className={`map-engine-pick${mapCatalog?.engine === src.id ? " active" : ""}`}
+                    disabled={!src.available || mapBusy}
+                    onClick={() => pickEngine(src.id as MapEngine)}
+                    aria-pressed={mapCatalog?.engine === src.id}
+                  >
+                    <strong>{src.label}</strong>
+                    <small>{src.detail}</small>
+                  </button>
+                ))}
+              </div>
+              <p className="settings-muted tight">
+                Geçiş: Navionics karo ↔ Nautilus ENC. Nautilus karoları z/x/y PNG olarak
+                userData/nautilus-cache/tiles altında; aynı karoya dönüş = cache hit.
+              </p>
+            </section>
+
+            <section className="settings-card settings-card-tight">
+              <div className="settings-card-head">
+                <span>Nautilus ENC listesi</span>
+                <em>{mapCatalog?.nautilusCells?.length ?? 0}</em>
+              </div>
+              {(mapCatalog?.nautilusCells?.length ?? 0) === 0 ? (
+                <p className="settings-muted tight">SDK testdata hücre yok / bridge kapalı.</p>
+              ) : (
+                <ul className="map-cell-list">
+                  {mapCatalog!.nautilusCells.map((c) => (
+                    <li key={c.id}>
+                      <button
+                        type="button"
+                        className={`map-cell-row${mapCatalog?.nautilusCellId === c.id ? " active" : ""}`}
+                        disabled={mapBusy}
+                        onClick={() => pickCell(c.id)}
+                      >
+                        <strong>{c.id}</strong>
+                        <small>{c.source}</small>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <button
+                type="button"
+                className="settings-btn ghost settings-btn-block"
+                disabled={mapBusy}
+                onClick={() => {
+                  setMapBusy(true);
+                  void window.irbis
+                    ?.nautilusRescan?.()
+                    .then(() => {
+                      refreshCatalog();
+                      onNote("Nautilus hücreler tarandı");
+                    })
+                    .catch((e: { message?: string }) => onNote(String(e?.message || e)))
+                    .finally(() => setMapBusy(false));
+                }}
+              >
+                ENC listesini yenile
+              </button>
+            </section>
+
+            {mapCatalog?.navionics ? (
+              <section className="settings-card settings-card-tight">
+                <div className="settings-card-head">
+                  <span>Navionics</span>
+                  <em>~{mapCatalog.navionics.cache?.count ?? "?"} karo</em>
+                </div>
+                <p className="settings-muted tight">{mapCatalog.navionics.cacheDir}</p>
+              </section>
+            ) : null}
           </div>
         ) : null}
 
