@@ -2,71 +2,70 @@
 
 Windows PC tabanlı denizcilik chartplotter ve cihaz entegrasyon platformu (IRMARINETECH).
 
-Harita: **Navionics offline** (geçiş dönemi) + **Teledyne SevenCs Nautilus ENC** (hedef motor).
+Harita: **Navionics offline** (geçiş) + **Teledyne SevenCs Nautilus ENC** (hedef).
 
 ## Klasör yapısı
 
 ```
 IRBIS/
-├── apps/desktop/          # Electron + React + Vite uygulama kabuğu
-├── packages/              # core / connect / charts (monorepo paketleri)
-├── native/                # Kalıcı Nautilus C++ renderer (nautilus-renderer)
-├── maps/                  # Nautilus handoff, PoC kaynak, check list
-├── samples/               # Demo bake / chart örnekleri
-├── tools/                 # bake, mock NMEA, yardımcı scriptler
-├── vendor/                # Yerel runtime (gitignore) — Navionics JS + permit + ENC
-├── IRBIS tool/            # Marka / doküman / plan (kod değil)
-├── logs/                  # Çalışma logları (gitignore)
-├── package.json           # Workspace kökü
+├── apps/desktop/       # Electron + React + Vite
+├── packages/           # core / connect / charts
+├── native/             # nautilus-renderer (kalıcı C++)
+├── maps/               # chart.info.txt + Nautilus PoC kaynak (PickChart, …)
+├── samples/            # demo bake
+├── tools/              # bake, mock NMEA
+├── vendor/             # gitignore — Navionics JS, permits, ENC
+├── IRBIS tool/         # marka + doküman + plan (kod değil)
+│   ├── brand/
+│   ├── docs/
+│   │   ├── md/         # tüm geliştirme Markdown’ları
+│   │   │   ├── nautilus/
+│   │   │   ├── urun/
+│   │   │   └── kabul/
+│   │   └── pdf/
+│   ├── plans/
+│   └── html/
+├── logs/               # gitignore
+├── package.json
 └── README.md
 ```
 
-### `vendor/` (gitignore — makinede kalır)
+### `IRBIS tool/docs/md/nautilus/` (okuma sırası)
 
-| Yol | Ne için |
-|-----|---------|
-| `vendor/navionics/` | `NavionicsTileServer.js` + cache helper → offline karo |
-| `vendor/permits/` | S-63 user permit dosyaları |
-| `vendor/enc/` | Deneme Türkiye ENC (Hafta 17) |
+1. `01-handoff-guncel.md` — güncel Nautilus durumu  
+2. `02-persistent-renderer-tasarim.md`  
+3. `05-gunluk-check-list.md`  
+4. `03-d3-vulkan-hwnd.md` · `04-urun-entegrasyon-checklist.md`  
+5. `00-handoff-eski.md` — arşiv  
 
-Navionics karo **cache klasörü** (binlerce PNG): varsayılan  
-`%USERPROFILE%\Documents\NDataReader\bizim-harita`  
-(`IRBIS_NAVIONICS_CACHE` ile override).
+### `vendor/` (gitignore)
 
-### `IRBIS tool/` (doküman / marka)
+| Yol | Kullanım |
+|-----|----------|
+| `navionics/` | Offline Navionics tile server |
+| `permits/` | S-63 user permit |
+| `enc/` | Deneme Türkiye ENC |
 
-| Yol | Ne için |
-|-----|---------|
-| `brand/` | Logolar |
-| `docs/` | Yol haritası, fizibilite, acceptance |
-| `plans/` | Radar / ONVIF / ürün planları |
-| `html/` | Marine topbar HTML prototipi |
+Karolar: `%USERPROFILE%\Documents\NDataReader\bizim-harita` (`IRBIS_NAVIONICS_CACHE`).
 
-### Kod vs doküman
+### `maps/` (runtime + PoC)
 
-| Kod / ürün | Doküman / marka | Yerel veri |
-|------------|-----------------|------------|
-| `apps/`, `packages/`, `native/`, `maps/`, `tools/` | `IRBIS tool/` | `vendor/`, `logs/`, `node_modules/` |
+Sadece `chart.info.txt` + `poc/` — MD’ler `IRBIS tool/docs/md/`’ye taşındı.
 
-Eski kök `LIB/` (SEAPIR, tam NDATAREADER, PDF yığını) kaldırıldı; sadece kullanılan parçalar `vendor/`’a alındı.
-
-## Geliştirme (Windows)
+## Geliştirme
 
 ```bash
 npm install
 npm run dev
 ```
 
-Log: `logs/irbis-main.log`.
-
-Ayarlar → Seyir: **Navionics** ↔ **Nautilus ENC** geçişi.
+Log: `logs/irbis-main.log`. Ayarlar → Seyir: Navionics ↔ Nautilus.
 
 ```bash
-# NMEA test
 npm start -w @irbis/mock-nmea-sender
 ```
 
 ## Yol haritası
 
-- Ürün / faz notları: [`IRBIS tool/docs/IRBIS-Yol-Haritasi.md`](IRBIS%20tool/docs/IRBIS-Yol-Haritasi.md)
-- Nautilus entegrasyon: [`maps/IRBIS_NAUTILUS_CURSOR_HANDOFF_UPDATED.md`](maps/IRBIS_NAUTILUS_CURSOR_HANDOFF_UPDATED.md)
+- [`IRBIS tool/docs/md/urun/yol-haritasi.md`](IRBIS%20tool/docs/md/urun/yol-haritasi.md)
+- Nautilus: [`IRBIS tool/docs/md/nautilus/01-handoff-guncel.md`](IRBIS%20tool/docs/md/nautilus/01-handoff-guncel.md)

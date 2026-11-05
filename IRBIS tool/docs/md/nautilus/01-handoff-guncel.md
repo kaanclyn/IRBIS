@@ -1,3 +1,6 @@
+> **Konum:** `IRBIS tool/docs/md/nautilus/` — runtime PoC: `maps/`
+
+---
 # IRBIS — Teledyne SevenCs Nautilus Kernel Entegrasyonu
 
 > **Cursor / AI geliştirme ajanı için proje devir dokümanı**  

@@ -1,3 +1,6 @@
+> **Konum:** `IRBIS tool/docs/md/nautilus/` — runtime PoC: `maps/`
+
+---
 # Persistent Nautilus Renderer — Tasarım (05.11.2026)
 
 ## Belge doğrulaması: `IRBIS_NAUTILUS_CURSOR_HANDOFF_UPDATED.md`
