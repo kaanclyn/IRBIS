@@ -18,8 +18,12 @@ samples/chart-bake/
 tools/tile57/**/*.zip
 tools/tile57/**/tile57-*-windows-gnu/
 
-# Local chart/vendor libs — not pushed (large / proprietary paths)
+# Local runtime data (Navionics helper, permits, ENC) — not pushed
+vendor/
 LIB/
+
+# Brand/docs may be local-heavy; keep structure in git if committed intentionally
+# IRBIS tool/brand/*.png can be large — ignore optional heavy binaries if needed later
 
 # Local agent / IDE runtime
 .claude-flow/
@@ -36,3 +40,8 @@ native/**/build/
 native/**/smoke/
 maps/poc/**/build/
 maps/poc/out/
+
+# Heavy local docs under IRBIS tool
+IRBIS tool/docs/HeyCaptain-Bridge-Kilavuz-TR.pdf
+IRBIS tool/docs/chatgpt*.txt
+

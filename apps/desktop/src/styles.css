@@ -4323,18 +4323,6 @@ html[data-ui="light"] .side-panel-bridge {
   box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.7);
 }
 
-.nautilus-busy {
-  position: absolute;
-  right: 10px;
-  bottom: 10px;
-  z-index: 3;
-  font-size: 11px;
-  color: #cbd5e1;
-  background: rgba(2, 6, 23, 0.75);
-  padding: 4px 8px;
-  border-radius: 4px;
-}
-
 .nautilus-viewport-empty {
   color: #94a3b8;
   font-size: 13px;

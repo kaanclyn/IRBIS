@@ -16,10 +16,10 @@ function defaultBizimHarita() {
 }
 
 function resolveNavionicsModule() {
-  // Prefer repo copy under LIB/NDATAREADER (same code as NDataReader app).
+  // Slim vendor copy (NavionicsTileServer + TileCache) — interim until Nautilus-only.
   const candidates = [
+    path.resolve(__dirname, "..", "..", "..", "vendor", "navionics", "NavionicsTileServer.js"),
     path.resolve(__dirname, "..", "..", "..", "LIB", "NDATAREADER", "src", "charts", "NavionicsTileServer.js"),
-    path.resolve(__dirname, "..", "..", "..", "NDATAREADER", "src", "charts", "NavionicsTileServer.js"),
   ];
   for (const p of candidates) {
     if (fs.existsSync(p)) return p;
@@ -50,7 +50,7 @@ async function startNavionicsServer(opts = {}) {
 
   const modPath = resolveNavionicsModule();
   if (!modPath) {
-    log.warn("NavionicsTileServer.js not found under LIB/NDATAREADER");
+    log.warn("NavionicsTileServer.js not found under vendor/navionics");
     return {
       running: false,
       port,

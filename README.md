@@ -1,17 +1,54 @@
 # IRBIS
 
-Windows PC tabanlı denizcilik chartplotter ve cihaz entegrasyon platformu.
+Windows PC tabanlı denizcilik chartplotter ve cihaz entegrasyon platformu (IRMARINETECH).
 
-## Dizin
+Harita: **Navionics offline** (geçiş dönemi) + **Teledyne SevenCs Nautilus ENC** (hedef motor).
 
-| Yol | İçerik |
-|-----|--------|
-| `apps/desktop` | Electron + React + Vite kabuk |
-| `packages/core` | Canonical bus tipleri |
-| `packages/connect` | NMEA intake (SEAPIR mantığı) |
-| `packages/charts` | S-57 / tile57 chart library |
-| `tools/mock-nmea-sender` | UDP 10110 test gönderici |
-| `LIB/` | Referanslar (SEAPIR, NDATAREADER, raporlar, mockup) — uygulama kodu değil |
+## Klasör yapısı
+
+```
+IRBIS/
+├── apps/desktop/          # Electron + React + Vite uygulama kabuğu
+├── packages/              # core / connect / charts (monorepo paketleri)
+├── native/                # Kalıcı Nautilus C++ renderer (nautilus-renderer)
+├── maps/                  # Nautilus handoff, PoC kaynak, check list
+├── samples/               # Demo bake / chart örnekleri
+├── tools/                 # bake, mock NMEA, yardımcı scriptler
+├── vendor/                # Yerel runtime (gitignore) — Navionics JS + permit + ENC
+├── IRBIS tool/            # Marka / doküman / plan (kod değil)
+├── logs/                  # Çalışma logları (gitignore)
+├── package.json           # Workspace kökü
+└── README.md
+```
+
+### `vendor/` (gitignore — makinede kalır)
+
+| Yol | Ne için |
+|-----|---------|
+| `vendor/navionics/` | `NavionicsTileServer.js` + cache helper → offline karo |
+| `vendor/permits/` | S-63 user permit dosyaları |
+| `vendor/enc/` | Deneme Türkiye ENC (Hafta 17) |
+
+Navionics karo **cache klasörü** (binlerce PNG): varsayılan  
+`%USERPROFILE%\Documents\NDataReader\bizim-harita`  
+(`IRBIS_NAVIONICS_CACHE` ile override).
+
+### `IRBIS tool/` (doküman / marka)
+
+| Yol | Ne için |
+|-----|---------|
+| `brand/` | Logolar |
+| `docs/` | Yol haritası, fizibilite, acceptance |
+| `plans/` | Radar / ONVIF / ürün planları |
+| `html/` | Marine topbar HTML prototipi |
+
+### Kod vs doküman
+
+| Kod / ürün | Doküman / marka | Yerel veri |
+|------------|-----------------|------------|
+| `apps/`, `packages/`, `native/`, `maps/`, `tools/` | `IRBIS tool/` | `vendor/`, `logs/`, `node_modules/` |
+
+Eski kök `LIB/` (SEAPIR, tam NDATAREADER, PDF yığını) kaldırıldı; sadece kullanılan parçalar `vendor/`’a alındı.
 
 ## Geliştirme (Windows)
 
@@ -20,25 +57,16 @@ npm install
 npm run dev
 ```
 
-Log dosyası: `logs/irbis-main.log` (boş ekran / yükleme hataları buraya yazılır). DevTools otomatik açılır.
+Log: `logs/irbis-main.log`.
 
-Uygulama NOAA S-57 demo hücreleri (tile57 bake → PMTiles → MapLibre) ile açılır. İnternet gerekmez (loopback chart server `:17357`). Chart Library’den hücre seçilir (☰).
-
-Bake (tüm `ENC_ROOT` hücreleri veya isim vererek):
-
-```powershell
-powershell -File tools/bake-noaa.ps1
-powershell -File tools/bake-noaa.ps1 US5MD11M US5MD21M
-```
-
-NMEA: uygulama `0.0.0.0:10110` UDP dinler. Trafik yoksa dahili simülasyon; paket gelince **CANLI**.
+Ayarlar → Seyir: **Navionics** ↔ **Nautilus ENC** geçişi.
 
 ```bash
+# NMEA test
 npm start -w @irbis/mock-nmea-sender
 ```
 
 ## Yol haritası
 
-Detaylı plan: [`LIB/IRBIS-Yol-Haritasi.md`](LIB/IRBIS-Yol-Haritasi.md)
-
-**Faz 0–1:** tile57 + NOAA bake ✓ · MapLibre ✓ · NMEA UDP + AIS ✓ · Chart Library (BYO klasör) ✓ · sırada rota / MOB / day-night.
+- Ürün / faz notları: [`IRBIS tool/docs/IRBIS-Yol-Haritasi.md`](IRBIS%20tool/docs/IRBIS-Yol-Haritasi.md)
+- Nautilus entegrasyon: [`maps/IRBIS_NAUTILUS_CURSOR_HANDOFF_UPDATED.md`](maps/IRBIS_NAUTILUS_CURSOR_HANDOFF_UPDATED.md)

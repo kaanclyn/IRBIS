@@ -64,7 +64,8 @@ function repoRoot() {
 function defaultEncRoot() {
   return path.join(
     repoRoot(),
-    "LIB",
+    "vendor",
+    "enc",
     "2022_Hafta_17",
     "2022_Hafta_17",
     "enc_file",
@@ -73,7 +74,7 @@ function defaultEncRoot() {
 }
 
 function defaultPermitRoot() {
-  return path.join(repoRoot(), "LIB", "Permit");
+  return path.join(repoRoot(), "vendor", "permits");
 }
 
 function settingsPath() {
@@ -157,7 +158,7 @@ function isEncrypted000(filePath) {
 }
 
 /**
- * Count User Permit hex strings in LIB/Permit *.txt (KB / B series lists).
+ * Count User Permit hex strings in vendor/permits *.txt (KB / B series lists).
  * @param {string} permitRoot
  */
 function scanUserPermitCount(permitRoot) {

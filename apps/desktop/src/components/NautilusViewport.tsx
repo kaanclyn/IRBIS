@@ -409,9 +409,7 @@ export function NautilusViewport({
 
   const chromeRight = info
     ? `${info.cellId} · ${info.renderMode || "draw"} · ${info.drawMs ?? info.ms ?? "—"}ms · ×${cam.scale.toFixed(2)}`
-    : busy
-      ? "…"
-      : "—";
+    : "—";
 
   return (
     <div className="nautilus-viewport">
@@ -419,7 +417,7 @@ export function NautilusViewport({
         <strong>Nautilus ENC</strong>
         <span>{chromeRight}</span>
         <div className="nautilus-viewport-actions">
-          <button type="button" disabled={busy && !info} onClick={() => void redraw({ action: "fit" })}>
+          <button type="button" disabled={!info && busy} onClick={() => void redraw({ action: "fit" })}>
             Fit
           </button>
         </div>
@@ -431,53 +429,46 @@ export function NautilusViewport({
         onPointerMove={onPointerMove}
         onPointerUp={(e) => void onPointerUp(e)}
       >
-        {busy && !info ? (
-          <div className="nautilus-viewport-empty">ENC yükleniyor…</div>
-        ) : err && !info ? (
+        {err && !info ? (
           <div className="nautilus-viewport-empty error">{err}</div>
         ) : info ? (
-          <>
-            <div
-              className="nautilus-layer"
-              style={{ transform: `translate3d(${cam.x}px, ${cam.y}px, 0) scale(${cam.scale})` }}
-            >
-              <img className="nautilus-viewport-img" src={info.url} alt={info.cellId} draggable={false} />
-              <div className="nautilus-overlay">
-                {markers.map((m) =>
-                  m.kind === "radar" ? (
-                    <div key={m.key} className="nautilus-radar-ring" style={{ left: `${m.x}%`, top: `${m.y}%` }} />
-                  ) : (
-                    <div
-                      key={m.key}
-                      className={`nautilus-marker nautilus-marker-${m.kind}`}
-                      style={{
-                        left: `${m.x}%`,
-                        top: `${m.y}%`,
-                        transform: `translate(-50%, -50%) rotate(${Number.isFinite(m.rot) ? m.rot : 0}deg)`,
-                      }}
-                      title={m.label}
-                    >
-                      <span className="nautilus-marker-glyph" />
-                      {m.kind === "ais" ? <em>{m.label}</em> : null}
-                    </div>
-                  )
-                )}
-                {pick && info.viewport ? (
+          <div
+            className="nautilus-layer"
+            style={{ transform: `translate3d(${cam.x}px, ${cam.y}px, 0) scale(${cam.scale})` }}
+          >
+            <img className="nautilus-viewport-img" src={info.url} alt={info.cellId} draggable={false} />
+            <div className="nautilus-overlay">
+              {markers.map((m) =>
+                m.kind === "radar" ? (
+                  <div key={m.key} className="nautilus-radar-ring" style={{ left: `${m.x}%`, top: `${m.y}%` }} />
+                ) : (
                   <div
-                    className="nautilus-pick-dot"
+                    key={m.key}
+                    className={`nautilus-marker nautilus-marker-${m.kind}`}
                     style={{
-                      left: `${geoToPct(info.viewport, pick.geo.lon, pick.geo.lat).x}%`,
-                      top: `${geoToPct(info.viewport, pick.geo.lon, pick.geo.lat).y}%`,
+                      left: `${m.x}%`,
+                      top: `${m.y}%`,
+                      transform: `translate(-50%, -50%) rotate(${Number.isFinite(m.rot) ? m.rot : 0}deg)`,
                     }}
-                  />
-                ) : null}
-              </div>
+                    title={m.label}
+                  >
+                    <span className="nautilus-marker-glyph" />
+                    {m.kind === "ais" ? <em>{m.label}</em> : null}
+                  </div>
+                )
+              )}
+              {pick && info.viewport ? (
+                <div
+                  className="nautilus-pick-dot"
+                  style={{
+                    left: `${geoToPct(info.viewport, pick.geo.lon, pick.geo.lat).x}%`,
+                    top: `${geoToPct(info.viewport, pick.geo.lon, pick.geo.lat).y}%`,
+                  }}
+                />
+              ) : null}
             </div>
-            {busy ? <div className="nautilus-busy">yenileniyor…</div> : null}
-          </>
-        ) : (
-          <div className="nautilus-viewport-empty">ENC yok</div>
-        )}
+          </div>
+        ) : null}
       </div>
     </div>
   );
