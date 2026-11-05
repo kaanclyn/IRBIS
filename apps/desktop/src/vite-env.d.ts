@@ -143,12 +143,16 @@ interface IrbisApi {
     ms?: number;
     drawMs?: number | null;
     renderMode?: string;
+    cacheHit?: boolean;
+    key?: string;
   }>;
   nautilusSetViewport: (payload?: {
     cellId?: string;
     width?: number;
     height?: number;
     dpi?: number;
+    /** 1 = kapalı, 2 = %100 tampon (ChatGPT overscan) */
+    overscan?: number | false;
     action?: "fit" | "pan" | "zoom" | "set" | "settle" | string;
     dxPx?: number;
     dyPx?: number;
@@ -172,6 +176,58 @@ interface IrbisApi {
     bytes: number;
     viewport?: { north: number; south: number; west: number; east: number } | null;
     fit?: { north: number; south: number; west: number; east: number } | null;
+    width?: number;
+    height?: number;
+    dpi?: number;
+    ms?: number;
+    drawMs?: number | null;
+    renderMode?: string;
+    cacheHit?: boolean;
+    cacheNear?: boolean;
+    key?: string;
+    overscan?: number;
+  }>;
+  nautilusEnsureTile: (payload: {
+    cellId?: string;
+    size?: number;
+    dpi?: number;
+    bbox: { north: number; south: number; west: number; east: number };
+    prefetch?: boolean;
+    /** Navionics-benzeri z/x/y (log + ileride disk yolu) */
+    z?: number;
+    x?: number;
+    y?: number;
+  }) => Promise<{
+    ok?: boolean;
+    cacheHit?: boolean;
+    url?: string;
+    key?: string;
+    viewport?: { north: number; south: number; west: number; east: number } | null;
+    tile?: boolean;
+    tileSize?: number;
+    ms?: number;
+    drawMs?: number | null;
+    z?: number;
+    x?: number;
+    y?: number;
+  }>;
+  nautilusCacheLookup: (payload?: {
+    cellId?: string;
+    width?: number;
+    height?: number;
+    dpi?: number;
+    bbox?: { north: number; south: number; west: number; east: number };
+    maxNearScore?: number;
+  }) => Promise<{
+    ok?: boolean;
+    cacheHit?: boolean;
+    cacheNear?: boolean;
+    nearScore?: number;
+    cellId?: string;
+    url?: string;
+    key?: string;
+    bytes?: number;
+    viewport?: { north: number; south: number; west: number; east: number } | null;
     width?: number;
     height?: number;
     dpi?: number;

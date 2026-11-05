@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld("irbis", {
   setNautilusCell: (cellId) => ipcRenderer.invoke("irbis:set-nautilus-cell", cellId),
   nautilusRender: (payload) => ipcRenderer.invoke("irbis:nautilus-render", payload),
   nautilusSetViewport: (payload) => ipcRenderer.invoke("irbis:nautilus-set-viewport", payload),
+  nautilusCacheLookup: (payload) => ipcRenderer.invoke("irbis:nautilus-cache-lookup", payload),
+  nautilusEnsureTile: (payload) => ipcRenderer.invoke("irbis:nautilus-ensure-tile", payload),
   nautilusPick: (payload) => ipcRenderer.invoke("irbis:nautilus-pick", payload),
   nautilusRescan: () => ipcRenderer.invoke("irbis:nautilus-rescan"),
   pickEncFolder: () => ipcRenderer.invoke("irbis:pick-enc-folder"),

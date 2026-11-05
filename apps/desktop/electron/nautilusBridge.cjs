@@ -1,6 +1,7 @@
 const http = require("node:http");
 const fs = require("node:fs");
 const path = require("node:path");
+const crypto = require("node:crypto");
 const { spawn } = require("node:child_process");
 const { app } = require("electron");
 const { log } = require("./log.cjs");
@@ -62,11 +63,68 @@ function fmtCoord(n) {
   return Number(n).toFixed(6);
 }
 
+/** Cache anahtarı — merkez+span, span’ın ~5% ızgarası (geri dönüşte HIT) */
+function snapDim(n) {
+  return Math.max(320, Math.round(Number(n) / 32) * 32);
+}
+
+function bboxCenterSpan(b) {
+  const lonSpan = Math.max(1e-8, b.east - b.west);
+  const latSpan = Math.max(1e-8, b.north - b.south);
+  return {
+    clon: (b.west + b.east) / 2,
+    clat: (b.south + b.north) / 2,
+    lonSpan,
+    latSpan,
+  };
+}
+
+function quantizeBBox(b) {
+  if (!b) return null;
+  const { clon, clat, lonSpan, latSpan } = bboxCenterSpan(b);
+  // ~%5 span ızgara → pan geri gelince aynı hücreye düşer
+  const gLon = Math.max(lonSpan * 0.05, 0.0008);
+  const gLat = Math.max(latSpan * 0.05, 0.0008);
+  const qClon = Math.round(clon / gLon) * gLon;
+  const qClat = Math.round(clat / gLat) * gLat;
+  const qLonSpan = Math.max(gLon, Math.round(lonSpan / gLon) * gLon);
+  const qLatSpan = Math.max(gLat, Math.round(latSpan / gLat) * gLat);
+  return clampBBox({
+    west: qClon - qLonSpan / 2,
+    east: qClon + qLonSpan / 2,
+    north: qClat + qLatSpan / 2,
+    south: qClat - qLatSpan / 2,
+  });
+}
+
+function fmtCacheCoord(n) {
+  return Number(n).toFixed(5);
+}
+
+/** Görünen bbox’ı merkezden factor kadar büyüt (overscan / metatile). */
+function expandBBox(b, factor) {
+  const f = Math.max(1, Number(factor) || 1);
+  if (!b || f === 1) return b ? clampBBox(b) : null;
+  const { clon, clat, lonSpan, latSpan } = bboxCenterSpan(b);
+  return clampBBox({
+    west: clon - (lonSpan * f) / 2,
+    east: clon + (lonSpan * f) / 2,
+    north: clat + (latSpan * f) / 2,
+    south: clat - (latSpan * f) / 2,
+  });
+}
+
+const DEFAULT_OVERSCAN = Math.min(2.5, Math.max(1, Number(process.env.IRBIS_NAUTILUS_OVERSCAN || 2)));
+/** Navionics ile aynı varsayılan karo boyutu */
+const TILE_SIZE = Math.max(256, Math.min(1024, Number(process.env.IRBIS_NAUTILUS_TILE_SIZE || 256)));
+
 function createNautilusBridge({ port = 18768 } = {}) {
   const sdkRoot = defaultSdkRoot();
   const frameRoot = path.join(app.getPath("userData"), "nautilus-frames");
+  const cacheRoot = path.join(app.getPath("userData"), "nautilus-frame-cache");
   fs.mkdirSync(frameRoot, { recursive: true });
-  // Eski tile cache dizinini temizle (bir kez)
+  fs.mkdirSync(cacheRoot, { recursive: true });
+  // Eski z/x/y tile cache dizinini temizle (bir kez)
   try {
     const legacy = path.join(app.getPath("userData"), "nautilus-cache");
     if (fs.existsSync(legacy)) {
@@ -88,6 +146,91 @@ function createNautilusBridge({ port = 18768 } = {}) {
   let baseUrl = `http://127.0.0.1:${port}`;
   let listenPort = port;
   let frameRev = 0;
+  let cacheHits = 0;
+  let cacheMisses = 0;
+  let cacheNearHits = 0;
+  /** Prefetch fırtınasını sınırla — kullanıcı settle’ını bloklamasın */
+  let prefetchBusy = 0;
+  const PREFETCH_MAX = 2;
+  /** @type {Map<string, { key: string, cellId: string, width: number, height: number, dpi: number, bbox: GeoBBox, clon: number, clat: number, lonSpan: number, latSpan: number }>} */
+  const cacheIndex = new Map();
+
+  function rememberCacheEntry(key, cellId, width, height, dpi, bbox) {
+    if (!bbox || !key) return;
+    const cs = bboxCenterSpan(bbox);
+    cacheIndex.set(key, {
+      key,
+      cellId: String(cellId).toUpperCase(),
+      width,
+      height,
+      dpi,
+      bbox,
+      ...cs,
+    });
+  }
+
+  function loadCacheIndexFromDisk() {
+    try {
+      for (const name of fs.readdirSync(cacheRoot)) {
+        if (!name.endsWith(".json")) continue;
+        const key = name.slice(0, -5);
+        const png = path.join(cacheRoot, `${key}.png`);
+        if (!fs.existsSync(png) || fs.statSync(png).size < 1000) continue;
+        try {
+          const meta = JSON.parse(fs.readFileSync(path.join(cacheRoot, name), "utf8"));
+          if (meta?.bbox && meta?.cellId) {
+            rememberCacheEntry(
+              key,
+              meta.cellId,
+              snapDim(meta.width || 1280),
+              snapDim(meta.height || 720),
+              meta.dpi || 96,
+              clampBBox(meta.bbox)
+            );
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+      log.info(
+        `nautilus cache ready · index=${cacheIndex.size} frames · dir=${cacheRoot}`
+      );
+    } catch {
+      /* ignore */
+    }
+  }
+  loadCacheIndexFromDisk();
+
+  /**
+   * Tam key yoksa: merkez ≤%12 span, zoom ≤%10 fark → yakın HIT (geri pan).
+   */
+  function findNearCache(cellId, width, height, dpi, bbox) {
+    if (!bbox) return null;
+    const id = String(cellId).toUpperCase();
+    const { clon, clat, lonSpan, latSpan } = bboxCenterSpan(bbox);
+    let best = null;
+    let bestScore = Infinity;
+    let bestDelta = null;
+    for (const entry of cacheIndex.values()) {
+      if (entry.cellId !== id) continue;
+      if (entry.width !== width || entry.height !== height) continue;
+      if (entry.dpi !== dpi) continue;
+      const dLon = Math.abs(entry.clon - clon) / lonSpan;
+      const dLat = Math.abs(entry.clat - clat) / latSpan;
+      const rLon = Math.abs(entry.lonSpan - lonSpan) / lonSpan;
+      const rLat = Math.abs(entry.latSpan - latSpan) / latSpan;
+      // Sıkı eşik — gevşek NEAR %6+ atlama hissi yaratıyordu
+      if (dLon > 0.05 || dLat > 0.05 || rLon > 0.06 || rLat > 0.06) continue;
+      const score = dLon + dLat + rLon * 2 + rLat * 2;
+      if (score < bestScore) {
+        bestScore = score;
+        best = entry;
+        bestDelta = { dLon, dLat, rLon, rLat, score };
+      }
+    }
+    if (!best) return null;
+    return { ...best, delta: bestDelta };
+  }
 
   const printChartExe = path.join(sdkRoot, "build", "PrintChart", "Release", "PrintChart.exe");
   const pickChartExe = path.join(sdkRoot, "build", "PickChart", "Release", "PickChart.exe");
@@ -372,35 +515,207 @@ function createNautilusBridge({ port = 18768 } = {}) {
     return run;
   }
 
+  function frameCacheKey(cellId, width, height, dpi, bbox) {
+    const w = snapDim(width);
+    const h = snapDim(height);
+    let b = "fit";
+    if (bbox) {
+      const q = quantizeBBox(bbox) || bbox;
+      const cs = bboxCenterSpan(q);
+      b = `c${fmtCacheCoord(cs.clon)}_${fmtCacheCoord(cs.clat)}_s${fmtCacheCoord(cs.lonSpan)}_${fmtCacheCoord(cs.latSpan)}`;
+    }
+    const raw = `${String(cellId).toUpperCase()}|${w}x${h}|${dpi}|${b}`;
+    return crypto.createHash("sha1").update(raw).digest("hex").slice(0, 16);
+  }
+
+  function serveCacheHit(cell, key, width, height, dpi, bbox, kind, extra = {}) {
+    const { png: cachePng, meta: cacheMeta } = cachePaths(key);
+    let metaObj = null;
+    try {
+      metaObj = JSON.parse(fs.readFileSync(cacheMeta, "utf8"));
+    } catch {
+      /* ignore */
+    }
+    // HIT: diske yeniden yazma / copy yok — sadece mevcut PNG’yi sun
+    const vp = metaObj?.bbox ? clampBBox(metaObj.bbox) : bbox || cellFitBBox.get(cell.id) || null;
+    if (vp && !bbox) cellFitBBox.set(cell.id, vp);
+    if (vp) rememberCacheEntry(key, cell.id, width, height, dpi, vp);
+    if (kind === "near") cacheNearHits += 1;
+    else cacheHits += 1;
+    const bytes = fs.statSync(cachePng).size;
+    const tag = kind === "near" ? "NEAR" : "EXACT";
+    const delta =
+      kind === "near" && extra.delta
+        ? ` dLon=${(extra.delta.dLon * 100).toFixed(1)}% dLat=${(extra.delta.dLat * 100).toFixed(1)}% score=${extra.delta.score.toFixed(3)}`
+        : "";
+    const via = extra.live ? "LIVE" : "HIT";
+    log.info(
+      `nautilus CACHE ${via} [${tag}] ${cell.id} key=${key} bytes=${bytes} draw=NO rewrite=NO file=${cachePng}${delta} · totals hit=${cacheHits} near=${cacheNearHits} miss=${cacheMisses}`
+    );
+    return {
+      ok: true,
+      cacheHit: true,
+      cacheNear: kind === "near",
+      cellId: cell.id,
+      // Stabil URL ( ?r= yok ) → tarayıcı bellek cache, geri pan’de anında
+      url: `${baseUrl}/cache/${key}.png`,
+      key,
+      rev: frameRev,
+      bytes,
+      viewport: vp,
+      fit: cellFitBBox.get(cell.id) || vp,
+      width,
+      height,
+      dpi,
+      ms: 0,
+      drawMs: 0,
+      renderMode: kind === "near" ? "cache-near" : "cache",
+      cacheFile: cachePng,
+    };
+  }
+
+  function cachePaths(key) {
+    return {
+      png: path.join(cacheRoot, `${key}.png`),
+      meta: path.join(cacheRoot, `${key}.json`),
+    };
+  }
+
+  function cacheStats() {
+    let files = 0;
+    let bytes = 0;
+    try {
+      for (const name of fs.readdirSync(cacheRoot)) {
+        if (!name.endsWith(".png")) continue;
+        files += 1;
+        bytes += fs.statSync(path.join(cacheRoot, name)).size;
+      }
+    } catch {
+      /* ignore */
+    }
+    return {
+      files,
+      bytes,
+      dir: cacheRoot,
+      hits: cacheHits,
+      nearHits: cacheNearHits,
+      misses: cacheMisses,
+      index: cacheIndex.size,
+    };
+  }
+
+  function neighborBBoxes(bbox) {
+    if (!bbox) return [];
+    const lonSpan = bbox.east - bbox.west;
+    const latSpan = bbox.north - bbox.south;
+    // Tipik pan (~%30) — agresif %45 prefetch kullanıcı settle’ını boğuyordu
+    const ox = lonSpan * 0.3;
+    const oy = latSpan * 0.3;
+    return [
+      clampBBox({ north: bbox.north + oy, south: bbox.south + oy, west: bbox.west, east: bbox.east }),
+      clampBBox({ north: bbox.north - oy, south: bbox.south - oy, west: bbox.west, east: bbox.east }),
+      clampBBox({ north: bbox.north, south: bbox.south, west: bbox.west - ox, east: bbox.east - ox }),
+      clampBBox({ north: bbox.north, south: bbox.south, west: bbox.west + ox, east: bbox.east + ox }),
+    ];
+  }
+
+  function schedulePrefetch(cellId, width, height, dpi, bbox) {
+    if (!bbox || prefetchBusy >= PREFETCH_MAX) return;
+    // Kullanıcı render’ı uçuştayken prefetch başlatma
+    if (inFlight.size > 0) return;
+    for (const nb of neighborBBoxes(bbox)) {
+      if (prefetchBusy >= PREFETCH_MAX) break;
+      const near = findNearCache(cellId, width, height, dpi, nb);
+      if (near) continue;
+      const key = frameCacheKey(cellId, width, height, dpi, quantizeBBox(nb));
+      const { png } = cachePaths(key);
+      if (fs.existsSync(png) && fs.statSync(png).size > 1000) continue;
+      prefetchBusy += 1;
+      void ensureRender(cellId, {
+        width,
+        height,
+        dpi,
+        bbox: nb,
+        prefetch: true,
+      })
+        .catch((e) => log.warn("nautilus prefetch", e.message || e))
+        .finally(() => {
+          prefetchBusy = Math.max(0, prefetchBusy - 1);
+        });
+    }
+  }
+
   /**
-   * Live viewport draw — no disk tile cache. Overwrites per-cell frame file.
+   * Persistent Draw + viewport frame cache (HIT = Draw yok).
+   * Prefetch: komşu extent’ler arka planda.
    */
   async function ensureRender(cellId, opts = {}) {
-    const width = Math.max(320, Math.min(2560, Math.round(Number(opts.width) || 1280)));
-    const height = Math.max(240, Math.min(1600, Math.round(Number(opts.height) || 720)));
+    // Karo: tam 256 (snapDim min 320 Navionics uyumunu bozuyordu)
+    const width = opts.exactSize
+      ? Math.max(64, Math.min(2560, Math.round(Number(opts.width) || 256)))
+      : snapDim(Math.max(320, Math.min(2560, Math.round(Number(opts.width) || 1280))));
+    const height = opts.exactSize
+      ? Math.max(64, Math.min(1600, Math.round(Number(opts.height) || 256)))
+      : snapDim(Math.max(240, Math.min(1600, Math.round(Number(opts.height) || 720))));
     const dpi = Number(opts.dpi) || 96;
+    const isPrefetch = !!opts.prefetch;
+    const noNear = !!opts.noNear;
+    const noPrintFallback = !!opts.noPrintFallback;
     const cell = cells.get(String(cellId || "").toUpperCase());
     if (!cell) throw new Error(`ENC hücre yok: ${cellId}`);
 
     let bbox = null;
-    if (opts.bbox) bbox = clampBBox(opts.bbox);
-    else if (
+    if (opts.bbox) {
+      // Karo kenarları quantized olursa mozaik kayar — yalnız clamp
+      bbox = opts.exactBBox ? clampBBox(opts.bbox) : quantizeBBox(opts.bbox);
+    } else if (
       [opts.north, opts.south, opts.west, opts.east].every((v) => Number.isFinite(Number(v)))
     ) {
-      bbox = clampBBox({
+      const raw = {
         north: Number(opts.north),
         south: Number(opts.south),
         west: Number(opts.west),
         east: Number(opts.east),
-      });
+      };
+      bbox = opts.exactBBox ? clampBBox(raw) : quantizeBBox(raw);
     }
 
-    const flightKey = `${cell.id}|${width}x${height}|${bbox ? fmtCoord(bbox.north) + fmtCoord(bbox.south) + fmtCoord(bbox.west) + fmtCoord(bbox.east) : "fit"}`;
+    const key = frameCacheKey(cell.id, width, height, dpi, bbox);
+    const flightKey = isPrefetch ? `pf:${key}` : key;
     const existing = inFlight.get(flightKey);
     if (existing) return existing;
+    // Aynı key kullanıcı işindeyse prefetch atla
+    if (isPrefetch && inFlight.has(key)) {
+      return inFlight.get(key);
+    }
 
     const work = (async () => {
-      const png = path.join(frameRoot, `${cell.id}.png`);
+      const { png: cachePng, meta: cacheMeta } = cachePaths(key);
+      const latestPng = path.join(frameRoot, `${cell.id}.png`);
+
+      if (fs.existsSync(cachePng) && fs.statSync(cachePng).size > 1000) {
+        return serveCacheHit(cell, key, width, height, dpi, bbox, "exact");
+      }
+
+      // Geri pan near-HIT — karoda YASAK (yanlış komşu coğrafya yapıştırır)
+      if (!isPrefetch && !noNear && bbox) {
+        const near = findNearCache(cell.id, width, height, dpi, bbox);
+        // score > 0.04 → atlama riski; Draw tercih (veya live paint sonra exact)
+        if (near && near.delta && near.delta.score <= 0.04) {
+          const nearPng = cachePaths(near.key).png;
+          if (fs.existsSync(nearPng) && fs.statSync(nearPng).size > 1000) {
+            return serveCacheHit(cell, near.key, width, height, dpi, near.bbox, "near", {
+              delta: near.delta,
+              requestedKey: key,
+            });
+          }
+        }
+      }
+
+      log.info(
+        `nautilus CACHE LOOKUP miss ${cell.id} want=${key} ${width}x${height} → will DRAW · dir=${cacheRoot}`
+      );
+
       const tmpDir = path.join(frameRoot, "_tmp");
       fs.mkdirSync(tmpDir, { recursive: true });
       const t0 = Date.now();
@@ -415,19 +730,25 @@ function createNautilusBridge({ port = 18768 } = {}) {
           const result = await runPersistentRender(cell.path, directPng, width, height, dpi, bbox);
           stdout = result.stdout || "";
           renderMs = result.ms;
-          if (result.viewport) finalBBox = clampBBox(result.viewport);
+          // Karo: istenen bbox anahtar — Kernel’in hafif sapması mozaik kırar
+          if (opts.exactBBox && bbox) finalBBox = bbox;
+          else if (result.viewport) finalBBox = quantizeBBox(result.viewport) || clampBBox(result.viewport);
           if (!fs.existsSync(directPng) || fs.statSync(directPng).size < 1000) {
             throw new Error("persistent PNG üretmedi");
           }
-          fs.copyFileSync(directPng, png);
+          fs.copyFileSync(directPng, cachePng);
+          fs.copyFileSync(directPng, latestPng);
         } catch (err) {
+          // Karo yağmurunda PrintChart = CodeMeter 212 (user maximum)
+          if (noPrintFallback) throw err;
           log.warn(`persistent render failed → PrintChart: ${err.message || err}`);
           modeUsed = "printchart-fallback";
           const result = await runPrintChart(cell.path, tmpDir, width, height, dpi, bbox);
           stdout = result.stdout;
           const produced = fs.readdirSync(tmpDir).find((f) => f.toLowerCase().endsWith(".png"));
           if (!produced) throw new Error("PrintChart PNG üretmedi");
-          fs.copyFileSync(path.join(tmpDir, produced), png);
+          fs.copyFileSync(path.join(tmpDir, produced), cachePng);
+          fs.copyFileSync(path.join(tmpDir, produced), latestPng);
           finalBBox = bbox || parseBoundaries(stdout);
         }
       } else {
@@ -435,24 +756,70 @@ function createNautilusBridge({ port = 18768 } = {}) {
         stdout = result.stdout;
         const produced = fs.readdirSync(tmpDir).find((f) => f.toLowerCase().endsWith(".png"));
         if (!produced) throw new Error("PrintChart PNG üretmedi");
-        fs.copyFileSync(path.join(tmpDir, produced), png);
+        fs.copyFileSync(path.join(tmpDir, produced), cachePng);
+        fs.copyFileSync(path.join(tmpDir, produced), latestPng);
         finalBBox = bbox || parseBoundaries(stdout);
         modeUsed = "printchart";
       }
 
       if (!finalBBox) finalBBox = parseBoundaries(stdout);
+      if (finalBBox && !opts.exactBBox) finalBBox = quantizeBBox(finalBBox) || finalBBox;
       if (finalBBox && !bbox) cellFitBBox.set(cell.id, finalBBox);
 
+      // Draw sonrası gerçek extent farklıysa anahtarı gerçek bbox’a da yaz
+      const actualKey = frameCacheKey(cell.id, width, height, dpi, finalBBox);
+      if (actualKey !== key && finalBBox) {
+        const alt = cachePaths(actualKey);
+        try {
+          if (!fs.existsSync(alt.png)) fs.copyFileSync(cachePng, alt.png);
+        } catch {
+          /* ignore */
+        }
+      }
+
+      const metaObj = {
+        cellId: cell.id,
+        width,
+        height,
+        dpi,
+        bbox: finalBBox,
+        renderMode: modeUsed,
+        drawMs: renderMs,
+        ms: Date.now() - t0,
+        renderedAt: new Date().toISOString(),
+      };
+      fs.writeFileSync(cacheMeta, JSON.stringify(metaObj, null, 2), "utf8");
+      if (finalBBox) rememberCacheEntry(key, cell.id, width, height, dpi, finalBBox);
+      if (actualKey !== key && finalBBox) {
+        try {
+          fs.writeFileSync(cachePaths(actualKey).meta, JSON.stringify(metaObj, null, 2), "utf8");
+          rememberCacheEntry(actualKey, cell.id, width, height, dpi, finalBBox);
+        } catch {
+          /* ignore */
+        }
+      }
+
+      cacheMisses += 1;
       frameRev += 1;
-      const ms = Date.now() - t0;
-      log.info(`nautilus DRAW ${cell.id} ${width}x${height} ${ms}ms mode=${modeUsed} drawMs=${renderMs ?? "-"}`);
+      const ms = metaObj.ms;
+      const bytes = fs.statSync(cachePng).size;
+      // Draw VAR — yeni PNG yazıldı
+      log.info(
+        `nautilus CACHE MISS [DRAW] ${cell.id} key=${key} wall=${ms}ms drawMs=${renderMs ?? "-"} mode=${modeUsed} bytes=${bytes} saved=${cachePng} · totals hit=${cacheHits} near=${cacheNearHits} miss=${cacheMisses}`
+      );
+
+      if (!isPrefetch && finalBBox) {
+        schedulePrefetch(cell.id, width, height, dpi, finalBBox);
+      }
 
       return {
         ok: true,
+        cacheHit: false,
         cellId: cell.id,
-        url: `${baseUrl}/frame/${cell.id}.png?r=${frameRev}`,
+        url: `${baseUrl}/cache/${key}.png`,
+        key,
         rev: frameRev,
-        bytes: fs.statSync(png).size,
+        bytes,
         viewport: finalBBox,
         fit: cellFitBBox.get(cell.id) || finalBBox,
         width,
@@ -514,13 +881,27 @@ function createNautilusBridge({ port = 18768 } = {}) {
 
   async function setViewport(payload = {}) {
     const cellId = payload.cellId;
-    const width = Number(payload.width) || 1280;
-    const height = Number(payload.height) || 720;
+    let width = Number(payload.width) || 1280;
+    let height = Number(payload.height) || 720;
     const dpi = Number(payload.dpi) || 96;
     const action = String(payload.action || "set");
+    const wantOs =
+      payload.overscan === false || payload.overscan === 0
+        ? 1
+        : Math.min(2.5, Math.max(1, Number(payload.overscan) || DEFAULT_OVERSCAN));
+
+    // Geo tampon = piksel (CSS ×os ile 1:1 — px×1.35 gerilmiş görünüyordu)
+    const pixelScale = wantOs <= 1.01 ? 1 : wantOs;
 
     if (action === "fit") {
-      return ensureRender(cellId, { width, height, dpi });
+      const fitted = await ensureRender(cellId, { width, height, dpi });
+      if (wantOs <= 1.01 || !fitted?.viewport) return { ...fitted, overscan: 1 };
+      const big = expandBBox(fitted.viewport, wantOs);
+      const rw = snapDim(Math.min(2048, Math.round(width * pixelScale)));
+      const rh = snapDim(Math.min(1280, Math.round(height * pixelScale)));
+      const r2 = await ensureRender(cellId, { width: rw, height: rh, dpi, bbox: big });
+      log.info(`nautilus OVERSCAN fit×${wantOs} px×${pixelScale} ${rw}x${rh}`);
+      return { ...r2, overscan: wantOs };
     }
 
     let bbox = payload.bbox
@@ -570,7 +951,61 @@ function createNautilusBridge({ port = 18768 } = {}) {
       }
     }
 
-    return ensureRender(cellId, { width, height, dpi, bbox: bbox || undefined });
+    if (bbox && wantOs > 1.01) {
+      bbox = expandBBox(bbox, wantOs);
+      width = snapDim(Math.min(2048, Math.round(width * pixelScale)));
+      height = snapDim(Math.min(1280, Math.round(height * pixelScale)));
+    }
+
+    const rendered = await ensureRender(cellId, { width, height, dpi, bbox: bbox || undefined });
+    if (bbox && wantOs > 1.01) {
+      log.info(
+        `nautilus OVERSCAN set×${wantOs} px×${pixelScale} ${width}x${height} hit=${rendered.cacheHit ? "Y" : "N"}`
+      );
+    }
+    return { ...rendered, overscan: bbox ? wantOs : 1 };
+  }
+
+  /**
+   * 256×256 ENC karosu — equirectangular lon/lat bbox (Kernel ile uyumlu).
+   * Navionics disk düzeni referans: {z}/{x}/{y}.png @ 256.
+   * Metatile yok; S-52 kenar kesilmesi sonraki iterasyon.
+   */
+  async function ensureTile(payload = {}) {
+    const cellId = payload.cellId;
+    const size = Math.max(64, Math.round(Number(payload.size) || TILE_SIZE));
+    const dpi = Number(payload.dpi) || 96;
+    if (!payload.bbox) throw new Error("ensureTile: bbox gerekli");
+    const bbox = clampBBox(payload.bbox);
+    const r = await ensureRender(cellId, {
+      width: size,
+      height: size,
+      dpi,
+      bbox,
+      prefetch: !!payload.prefetch,
+      exactSize: true,
+      exactBBox: true,
+      noNear: true,
+      noPrintFallback: true,
+    });
+    const zxy =
+      payload.z != null ? ` z${payload.z}/${payload.x}/${payload.y}` : "";
+    if (!r.cacheHit) {
+      log.info(
+        `nautilus TILE DRAW ${size}² ${cellId || "?"}${zxy} hit=N bytes=${r.bytes || 0} drawMs=${r.drawMs ?? "?"}`
+      );
+    } else {
+      log.info(`nautilus TILE HIT ${size}² ${cellId || "?"}${zxy} key=${r.key || "?"}`);
+    }
+    return {
+      ...r,
+      tile: true,
+      tileSize: size,
+      overscan: 1,
+      z: payload.z,
+      x: payload.x,
+      y: payload.y,
+    };
   }
 
   async function pickFeature(payload = {}) {
@@ -718,6 +1153,23 @@ function createNautilusBridge({ port = 18768 } = {}) {
           return;
         }
         const u = String(req.url || "").split("?")[0];
+        const cacheMatch = /^\/cache\/([a-f0-9]+)\.png$/i.exec(u);
+        if (cacheMatch) {
+          const file = path.join(cacheRoot, `${cacheMatch[1].toLowerCase()}.png`);
+          if (!fs.existsSync(file)) {
+            res.writeHead(404);
+            res.end("missing");
+            return;
+          }
+          const buf = fs.readFileSync(file);
+          res.writeHead(200, {
+            "Content-Type": "image/png",
+            "Content-Length": buf.length,
+            "Cache-Control": "private, max-age=3600",
+          });
+          res.end(buf);
+          return;
+        }
         const m = /^\/frame\/([A-Za-z0-9_-]+)\.png$/i.exec(u);
         if (m) {
           const file = path.join(frameRoot, `${m[1].toUpperCase()}.png`);
@@ -743,6 +1195,7 @@ function createNautilusBridge({ port = 18768 } = {}) {
               cells: cells.size,
               renderMode,
               persistentAlive: !!(persistent.proc && !persistent.proc.killed),
+              cache: cacheStats(),
             })
           );
           return;
@@ -784,11 +1237,17 @@ function createNautilusBridge({ port = 18768 } = {}) {
       baseUrl,
       cells: cells.size,
       frameRoot,
+      cacheRoot,
+      cache: cacheStats(),
       d2: {
         viewportIpc: true,
         panZoom: true,
         geoPick: true,
         encPick: true,
+        frameCache: true,
+        prefetch: true,
+        overscan: DEFAULT_OVERSCAN,
+        tileSize: TILE_SIZE,
       },
     };
   }
@@ -805,19 +1264,73 @@ function createNautilusBridge({ port = 18768 } = {}) {
     }
   }
 
+  /**
+   * Sadece disk lookup — Draw yok. Pan sırasında canlı cache paint için.
+   * maxNearScore: üstü reddedilir (atlama hissini önlemek için sıkı tut).
+   */
+  function lookupCache(opts = {}) {
+    const width = snapDim(Math.max(320, Math.min(2560, Math.round(Number(opts.width) || 1280))));
+    const height = snapDim(Math.max(240, Math.min(1600, Math.round(Number(opts.height) || 720))));
+    const dpi = Number(opts.dpi) || 96;
+    const cell = cells.get(String(opts.cellId || "").toUpperCase());
+    if (!cell) return { ok: false, cacheHit: false };
+    let bbox = null;
+    if (opts.bbox) bbox = quantizeBBox(opts.bbox);
+    else if (
+      [opts.north, opts.south, opts.west, opts.east].every((v) => Number.isFinite(Number(v)))
+    ) {
+      bbox = quantizeBBox({
+        north: Number(opts.north),
+        south: Number(opts.south),
+        west: Number(opts.west),
+        east: Number(opts.east),
+      });
+    }
+    if (!bbox) return { ok: false, cacheHit: false };
+
+    const key = frameCacheKey(cell.id, width, height, dpi, bbox);
+    const { png } = cachePaths(key);
+    if (fs.existsSync(png) && fs.statSync(png).size > 1000) {
+      return serveCacheHit(cell, key, width, height, dpi, bbox, "exact", { live: true });
+    }
+
+    const maxNear = Number.isFinite(Number(opts.maxNearScore)) ? Number(opts.maxNearScore) : 0.035;
+    const near = findNearCache(cell.id, width, height, dpi, bbox);
+    if (near && near.delta && near.delta.score <= maxNear) {
+      const nearPng = cachePaths(near.key).png;
+      if (fs.existsSync(nearPng) && fs.statSync(nearPng).size > 1000) {
+        const hit = serveCacheHit(cell, near.key, width, height, dpi, near.bbox, "near", {
+          delta: near.delta,
+          live: true,
+        });
+        return { ...hit, nearScore: near.delta.score };
+      }
+    }
+    return { ok: true, cacheHit: false, cellId: cell.id, key, want: key };
+  }
+
   return {
     rescan,
     list,
     ensureRender,
     setViewport,
+    ensureTile,
+    lookupCache,
     pickFeature,
     screenToGeo,
     geoToScreen,
     startServer,
     status,
+    cacheStats,
     stop,
     get baseUrl() {
       return baseUrl;
+    },
+    get overscanDefault() {
+      return DEFAULT_OVERSCAN;
+    },
+    get tileSize() {
+      return TILE_SIZE;
     },
   };
 }

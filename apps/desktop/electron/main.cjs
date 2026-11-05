@@ -413,6 +413,18 @@ ipcMain.handle("irbis:nautilus-set-viewport", async (_e, payload) => {
   return nautilus.setViewport({ ...payload, cellId });
 });
 
+ipcMain.handle("irbis:nautilus-cache-lookup", async (_e, payload) => {
+  if (!nautilus) throw new Error("Nautilus bridge yok");
+  const cellId = payload?.cellId || mapEngine?.get()?.nautilusCellId;
+  return nautilus.lookupCache({ ...payload, cellId });
+});
+
+ipcMain.handle("irbis:nautilus-ensure-tile", async (_e, payload) => {
+  if (!nautilus) throw new Error("Nautilus bridge yok");
+  const cellId = payload?.cellId || mapEngine?.get()?.nautilusCellId;
+  return nautilus.ensureTile({ ...payload, cellId });
+});
+
 ipcMain.handle("irbis:nautilus-pick", async (_e, payload) => {
   if (!nautilus) throw new Error("Nautilus bridge yok");
   const cellId = payload?.cellId || mapEngine?.get()?.nautilusCellId;

@@ -2,9 +2,14 @@
 
 | Klasör | İçerik |
 |--------|--------|
+| `yapilanlar/` | **ChatGPT için:** ne bitti (detay) |
+| `kalanlar/` | **ChatGPT için:** ne kaldı / sıra (detay) |
 | `nautilus/` | SevenCs Nautilus entegrasyon handoff + tasarım + checklist |
 | `urun/` | Yol haritası, teknik/ürün mimarisi |
 | `kabul/` | Faz acceptance kriterleri |
+
+**Hızlı yapıştır:**  
+[`yapilanlar/yapilanlar-detay.md`](yapilanlar/yapilanlar-detay.md) · [`kalanlar/kalanlar-detay.md`](kalanlar/kalanlar-detay.md)
 
 ## Nautilus okuma sırası
 
