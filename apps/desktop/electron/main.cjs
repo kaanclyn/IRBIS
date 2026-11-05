@@ -303,13 +303,12 @@ ipcMain.handle("irbis:get-chart-config", async () => {
         cellId: active?.id ?? null,
         cells,
         status: nautilus.status(),
-        cache: nautilus.cacheStats(),
       },
       cellName: active?.id || "NAUTILUS",
       bakeReady: true,
       readyCells: [],
       warning: active
-        ? `Nautilus ENC · ${active.id} · cache ${nautilus.cacheStats().files} png`
+        ? `Nautilus ENC · ${active.id} · ${nautilus.status()?.renderMode || "draw"}`
         : "Nautilus · ENC hücre yok",
       hideWorldBasemap: true,
       center: [61.0, -32.49],
@@ -330,9 +329,7 @@ ipcMain.handle("irbis:get-chart-config", async () => {
           cache: navionics.cache,
         }
       : null,
-    nautilus: nautilus
-      ? { cells: nautilus.list(), status: nautilus.status(), cache: nautilus.cacheStats() }
-      : null,
+    nautilus: nautilus ? { cells: nautilus.list(), status: nautilus.status() } : null,
     ...(navOk
       ? {
           center: [29.2768, 40.82281],
@@ -369,7 +366,7 @@ ipcMain.handle("irbis:get-map-catalog", () => {
         label: "Nautilus ENC (SevenCs)",
         available: !!nautilus && nautilus.list().length > 0,
         detail: nautilus
-          ? `${nautilus.list().length} hücre · cache ${nautilus.cacheStats().files} png`
+          ? `${nautilus.list().length} hücre · ${nautilus.status()?.renderMode || "draw"}`
           : "Nautilus bridge yok",
       },
     ],

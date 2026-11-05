@@ -25,8 +25,8 @@
 | 9 | D3 Vulkan/HWND | ⏸ | `NAUTILUS_D3_RENDER_PATH.md` |
 | 10 | Ürün checklist | ✅ | `NAUTILUS_PRODUCT_INTEGRATION_CHECKLIST.md` |
 | 11 | Full-bleed viewport | ✅ | sahneyi doldurur |
-| 12 | z/x/y karo disk cache | ⚠️ | çalışıyor ama Navionics kadar değil |
-| 13 | Doğrusal zoom hissi | ⚠️ | CSS akıcı; settle’da karo snap |
+| 12 | z/x/y karo disk cache | ❌ kaldırıldı | live SetViewPort frame |
+| 13 | Doğrusal zoom hissi | ✅ | CSS preview → settle redraw |
 | 14 | ChartServer / gerçek tile motoru | ❌ | teslim edilmedi |
 | 15 | Handoff v2 doğrulama (C++ vs spawn) | ✅ | `IRBIS_NAUTILUS_CURSOR_HANDOFF_UPDATED.md` doğru |
 | 16 | Persistent C++ renderer | ✅ | `native/nautilus-renderer` · 2. frame **405 ms** |

@@ -23,7 +23,6 @@ interface ChartConfig {
     cellId?: string | null;
     cells?: Array<{ id: string; name: string; path: string; source: string }>;
     status?: unknown;
-    cache?: { files: number; bytes: number; dir: string };
   };
   navionics?: {
     tileUrl: string;
@@ -133,31 +132,30 @@ interface IrbisApi {
     bbox?: { north: number; south: number; west: number; east: number };
   }) => Promise<{
     ok: boolean;
-    cacheHit: boolean;
     cellId: string;
     url: string;
-    key: string;
+    rev?: number;
     bytes: number;
     viewport?: { north: number; south: number; west: number; east: number } | null;
     width?: number;
     height?: number;
     dpi?: number;
-    meta?: unknown;
+    ms?: number;
+    drawMs?: number | null;
+    renderMode?: string;
   }>;
   nautilusSetViewport: (payload?: {
     cellId?: string;
     width?: number;
     height?: number;
     dpi?: number;
-    action?: "fit" | "pan" | "zoom" | "set" | "settle" | "tile" | string;
+    action?: "fit" | "pan" | "zoom" | "set" | "settle" | string;
     dxPx?: number;
     dyPx?: number;
     factor?: number;
     anchorX?: number;
     anchorY?: number;
-    z?: number;
-    tx?: number;
-    ty?: number;
+    scale?: number;
     centerLon?: number;
     centerLat?: number;
     viewport?: { north: number; south: number; west: number; east: number };
@@ -168,19 +166,18 @@ interface IrbisApi {
     east?: number;
   }) => Promise<{
     ok: boolean;
-    cacheHit: boolean;
     cellId: string;
     url: string;
-    key: string;
+    rev?: number;
     bytes: number;
     viewport?: { north: number; south: number; west: number; east: number } | null;
+    fit?: { north: number; south: number; west: number; east: number } | null;
     width?: number;
     height?: number;
     dpi?: number;
-    tile?: { z: number; tx: number; ty: number } | null;
-    fit?: { north: number; south: number; west: number; east: number } | null;
-    cacheDir?: string;
-    meta?: unknown;
+    ms?: number;
+    drawMs?: number | null;
+    renderMode?: string;
   }>;
   nautilusPick: (payload: {
     cellId?: string;

@@ -1,7 +1,6 @@
 const http = require("node:http");
 const fs = require("node:fs");
 const path = require("node:path");
-const crypto = require("node:crypto");
 const { spawn } = require("node:child_process");
 const { app } = require("electron");
 const { log } = require("./log.cjs");
@@ -47,7 +46,6 @@ function clampBBox(b) {
 }
 
 function parseBoundaries(stdout) {
-  // Boundaries:   North -32.45, South -32.5333, West 60.9667, East 61
   const m = /Boundaries:\s*North\s+([-\d.]+)\s*,\s*South\s+([-\d.]+)\s*,\s*West\s+([-\d.]+)\s*,\s*East\s+([-\d.]+)/i.exec(
     stdout || ""
   );
@@ -61,47 +59,35 @@ function parseBoundaries(stdout) {
 }
 
 function fmtCoord(n) {
-  // 4 decimal ≈ 11 m — aynı bakış pan/zoom cache isabeti için yeter
-  return Number(n).toFixed(4);
-}
-
-/** Sabit boy kovaları → resize’ta yeni PrintChart yağmuru olmasın */
-function bucketSize(width, height) {
-  const w = Number(width) || 1280;
-  const h = Number(height) || 720;
-  const aspect = w / Math.max(1, h);
-  if (w <= 1400) return { width: 1280, height: Math.round(1280 / aspect) };
-  if (w <= 1700) return { width: 1600, height: Math.round(1600 / aspect) };
-  return { width: 1920, height: Math.round(1920 / aspect) };
-}
-
-function quantizeBBox(b) {
-  if (!b) return null;
-  return clampBBox({
-    north: Number(fmtCoord(b.north)),
-    south: Number(fmtCoord(b.south)),
-    west: Number(fmtCoord(b.west)),
-    east: Number(fmtCoord(b.east)),
-  });
+  return Number(n).toFixed(6);
 }
 
 function createNautilusBridge({ port = 18768 } = {}) {
   const sdkRoot = defaultSdkRoot();
-  const cacheRoot = path.join(app.getPath("userData"), "nautilus-cache");
-  fs.mkdirSync(cacheRoot, { recursive: true });
-  log.info(`nautilus PNG cache dir: ${cacheRoot}`);
+  const frameRoot = path.join(app.getPath("userData"), "nautilus-frames");
+  fs.mkdirSync(frameRoot, { recursive: true });
+  // Eski tile cache dizinini temizle (bir kez)
+  try {
+    const legacy = path.join(app.getPath("userData"), "nautilus-cache");
+    if (fs.existsSync(legacy)) {
+      fs.rmSync(legacy, { recursive: true, force: true });
+      log.info("nautilus: removed legacy tile cache");
+    }
+  } catch (e) {
+    log.warn("nautilus legacy cache cleanup", e);
+  }
 
   /** @type {Map<string, { id: string, name: string, path: string, source: string }>} */
   let cells = new Map();
-  /** @type {Map<string, GeoBBox>} cell default fit bbox */
+  /** @type {Map<string, GeoBBox>} */
   const cellFitBBox = new Map();
-  /** @type {Map<string, Promise<any>>} aynı anahtar için tek uçuş */
+  /** @type {Map<string, Promise<any>>} */
   const inFlight = new Map();
-  /** PrintChart sırası — CodeMeter Error 212 (max users) önlemi */
   let printChain = Promise.resolve();
   let server = null;
   let baseUrl = `http://127.0.0.1:${port}`;
   let listenPort = port;
+  let frameRev = 0;
 
   const printChartExe = path.join(sdkRoot, "build", "PrintChart", "Release", "PrintChart.exe");
   const pickChartExe = path.join(sdkRoot, "build", "PickChart", "Release", "PickChart.exe");
@@ -115,9 +101,8 @@ function createNautilusBridge({ port = 18768 } = {}) {
     path.join(repoRoot, "native", "nautilus-renderer", "build", "Debug", "nautilus-renderer.exe"),
   ].filter(Boolean);
   const persistentExe = persistentExeCandidates.find((p) => fs.existsSync(p)) || null;
-  /** printchart | persistent — env IRBIS_NAUTILUS_MODE; default persistent if exe exists */
   const modeEnv = String(process.env.IRBIS_NAUTILUS_MODE || "").toLowerCase();
-  let renderMode =
+  const renderMode =
     modeEnv === "printchart" || modeEnv === "persistent"
       ? modeEnv
       : persistentExe
@@ -127,7 +112,6 @@ function createNautilusBridge({ port = 18768 } = {}) {
   const qtBin = process.env.IRBIS_QT_BIN || "C:\\Qt\\5.15.2\\msvc2019_64\\bin";
   const qtPlugins = process.env.IRBIS_QT_PLUGINS || "C:\\Qt\\5.15.2\\msvc2019_64\\plugins";
 
-  /** Long-lived C++ nautilus-renderer (stdin JSON / stdout JSON). */
   const persistent = {
     proc: null,
     buf: "",
@@ -135,6 +119,8 @@ function createNautilusBridge({ port = 18768 } = {}) {
     /** @type {Map<number, {resolve: Function, reject: Function}>} */
     pending: new Map(),
     loadedCell: null,
+    /** @type {GeoBBox | null} */
+    lastViewport: null,
     starting: null,
   };
 
@@ -161,6 +147,7 @@ function createNautilusBridge({ port = 18768 } = {}) {
       persistent.proc = proc;
       persistent.buf = "";
       persistent.loadedCell = null;
+      persistent.lastViewport = null;
 
       let ready = false;
       const failTimer = setTimeout(() => {
@@ -215,6 +202,7 @@ function createNautilusBridge({ port = 18768 } = {}) {
         persistent.pending.clear();
         persistent.proc = null;
         persistent.loadedCell = null;
+        persistent.lastViewport = null;
         persistent.starting = null;
       });
       proc.on("error", (err) => {
@@ -254,31 +242,32 @@ function createNautilusBridge({ port = 18768 } = {}) {
         dpi,
       });
       persistent.loadedCell = cellPath;
-      if (!bbox && loaded.viewport) {
-        /* fit viewport from load */
-      }
+      if (loaded.viewport) persistent.lastViewport = clampBBox(loaded.viewport);
     }
-    if (bbox) {
+
+    const box = bbox || persistent.lastViewport;
+    if (box) {
       await persistentRequest("setViewport", {
-        north: bbox.north,
-        south: bbox.south,
-        west: bbox.west,
-        east: bbox.east,
+        north: box.north,
+        south: box.south,
+        west: box.west,
+        east: box.east,
         width,
         height,
         dpi,
       });
+      persistent.lastViewport = clampBBox(box);
     }
+
     const rendered = await persistentRequest("render", { out: jsonPath(outPng) });
+    const vp = rendered.viewport ? clampBBox(rendered.viewport) : persistent.lastViewport;
+    if (vp) persistent.lastViewport = vp;
     return {
-      stdout: bbox
-        ? `Boundaries:   North ${bbox.north}, South ${bbox.south}, West ${bbox.west}, East ${bbox.east}`
-        : rendered.viewport
-          ? `Boundaries:   North ${rendered.viewport.north}, South ${rendered.viewport.south}, West ${rendered.viewport.west}, East ${rendered.viewport.east}`
-          : "",
-      stderr: "",
+      stdout: vp
+        ? `Boundaries:   North ${vp.north}, South ${vp.south}, West ${vp.west}, East ${vp.east}`
+        : "",
       ms: rendered.ms,
-      viewport: rendered.viewport || bbox || null,
+      viewport: vp,
       mode: "persistent",
     };
   }
@@ -297,6 +286,7 @@ function createNautilusBridge({ port = 18768 } = {}) {
       }
       persistent.proc = null;
       persistent.loadedCell = null;
+      persistent.lastViewport = null;
     }
   }
 
@@ -312,105 +302,14 @@ function createNautilusBridge({ port = 18768 } = {}) {
       const name = path.basename(filePath, path.extname(filePath));
       const id = name.toUpperCase();
       if (cells.has(id)) continue;
-      cells.set(id, {
-        id,
-        name,
-        path: filePath,
-        source: "sdk-testdata",
-      });
+      cells.set(id, { id, name, path: filePath, source: "sdk-testdata" });
     }
-    log.info(`nautilus cells scanned: ${cells.size} · sdk=${sdkRoot}`);
+    log.info(`nautilus cells scanned: ${cells.size} · sdk=${sdkRoot} · mode=${renderMode}`);
     return list();
   }
 
   function list() {
     return [...cells.values()].sort((a, b) => a.id.localeCompare(b.id));
-  }
-
-  function cacheKey(cellId, width, height, dpi, bbox, tile) {
-    if (tile) {
-      // Navionics-benzeri karo anahtarı — aynı z/x/y her zaman aynı dosya
-      return `${String(cellId).toUpperCase()}_z${tile.z}_x${tile.tx}_y${tile.ty}_${width}x${height}`;
-    }
-    const b = bbox
-      ? `${fmtCoord(bbox.north)},${fmtCoord(bbox.south)},${fmtCoord(bbox.west)},${fmtCoord(bbox.east)}`
-      : "fit";
-    const raw = `${cellId}|${width}x${height}|${dpi}|cairo|${b}`;
-    return crypto.createHash("sha1").update(raw).digest("hex").slice(0, 16);
-  }
-
-  function cachePaths(key) {
-    const dir = path.join(cacheRoot, "tiles");
-    fs.mkdirSync(dir, { recursive: true });
-    return {
-      png: path.join(dir, `${key}.png`),
-      meta: path.join(dir, `${key}.json`),
-    };
-  }
-
-  function loadFitBBox(cellId) {
-    const id = String(cellId || "").toUpperCase();
-    if (cellFitBBox.has(id)) return cellFitBBox.get(id);
-    const fitMeta = path.join(cacheRoot, "tiles", `${id}_FIT.json`);
-    try {
-      if (fs.existsSync(fitMeta)) {
-        const j = JSON.parse(fs.readFileSync(fitMeta, "utf8"));
-        if (j?.bbox) {
-          cellFitBBox.set(id, clampBBox(j.bbox));
-          return cellFitBBox.get(id);
-        }
-      }
-    } catch {
-      /* ignore */
-    }
-    return null;
-  }
-
-  function saveFitBBox(cellId, bbox) {
-    const id = String(cellId || "").toUpperCase();
-    if (!bbox) return;
-    cellFitBBox.set(id, clampBBox(bbox));
-    const fitMeta = path.join(cacheRoot, "tiles", `${id}_FIT.json`);
-    fs.mkdirSync(path.dirname(fitMeta), { recursive: true });
-    fs.writeFileSync(fitMeta, JSON.stringify({ cellId: id, bbox: cellFitBBox.get(id) }, null, 2), "utf8");
-  }
-
-  /** Hücre fit bbox üzerinde z seviyesinde karo (Navionics XYZ benzeri) */
-  function resolveTile(fit, z, centerLon, centerLat) {
-    const Z = Math.max(0, Math.min(5, Math.round(Number(z) || 0)));
-    const n = 1 << Z;
-    const spanLon = (fit.east - fit.west) / n;
-    const spanLat = (fit.north - fit.south) / n;
-    let tx = Math.floor((centerLon - fit.west) / spanLon);
-    let ty = Math.floor((fit.north - centerLat) / spanLat);
-    if (!Number.isFinite(tx)) tx = 0;
-    if (!Number.isFinite(ty)) ty = 0;
-    tx = Math.max(0, Math.min(n - 1, tx));
-    ty = Math.max(0, Math.min(n - 1, ty));
-    const bbox = clampBBox({
-      west: fit.west + tx * spanLon,
-      east: fit.west + (tx + 1) * spanLon,
-      north: fit.north - ty * spanLat,
-      south: fit.north - (ty + 1) * spanLat,
-    });
-    return { z: Z, tx, ty, n, bbox };
-  }
-
-  function cacheStats() {
-    let files = 0;
-    let bytes = 0;
-    const dir = path.join(cacheRoot, "tiles");
-    try {
-      if (!fs.existsSync(dir)) return { files: 0, bytes: 0, dir };
-      for (const name of fs.readdirSync(dir)) {
-        if (!name.endsWith(".png")) continue;
-        files += 1;
-        bytes += fs.statSync(path.join(dir, name)).size;
-      }
-    } catch {
-      /* ignore */
-    }
-    return { files, bytes, dir };
   }
 
   function runPrintChart(cellPath, outDir, width, height, dpi, bbox) {
@@ -474,94 +373,62 @@ function createNautilusBridge({ port = 18768 } = {}) {
   }
 
   /**
-   * @param {string} cellId
-   * @param {{ width?: number, height?: number, dpi?: number, north?: number, south?: number, west?: number, east?: number, bbox?: GeoBBox }} opts
+   * Live viewport draw — no disk tile cache. Overwrites per-cell frame file.
    */
   async function ensureRender(cellId, opts = {}) {
-    const bucket = bucketSize(opts.width, opts.height);
-    const width = bucket.width;
-    const height = bucket.height;
+    const width = Math.max(320, Math.min(2560, Math.round(Number(opts.width) || 1280)));
+    const height = Math.max(240, Math.min(1600, Math.round(Number(opts.height) || 720)));
     const dpi = Number(opts.dpi) || 96;
     const cell = cells.get(String(cellId || "").toUpperCase());
     if (!cell) throw new Error(`ENC hücre yok: ${cellId}`);
 
     let bbox = null;
-    let tile = opts.tile || null;
-    if (opts.bbox) bbox = quantizeBBox(opts.bbox);
+    if (opts.bbox) bbox = clampBBox(opts.bbox);
     else if (
       [opts.north, opts.south, opts.west, opts.east].every((v) => Number.isFinite(Number(v)))
     ) {
-      bbox = quantizeBBox({
+      bbox = clampBBox({
         north: Number(opts.north),
         south: Number(opts.south),
         west: Number(opts.west),
         east: Number(opts.east),
       });
     }
-    if (tile?.bbox) bbox = quantizeBBox(tile.bbox);
 
-    const key = cacheKey(cell.id, width, height, dpi, bbox, tile);
-    const existing = inFlight.get(key);
+    const flightKey = `${cell.id}|${width}x${height}|${bbox ? fmtCoord(bbox.north) + fmtCoord(bbox.south) + fmtCoord(bbox.west) + fmtCoord(bbox.east) : "fit"}`;
+    const existing = inFlight.get(flightKey);
     if (existing) return existing;
 
     const work = (async () => {
-      const { png, meta } = cachePaths(key);
-
-      if (fs.existsSync(png) && fs.statSync(png).size > 1000) {
-        let metaObj = null;
-        try {
-          metaObj = JSON.parse(fs.readFileSync(meta, "utf8"));
-        } catch {
-          /* ignore */
-        }
-        if (metaObj?.bbox && !tile) saveFitBBox(cell.id, metaObj.bbox);
-        log.info(`nautilus CACHE HIT ${key}`);
-        return {
-          ok: true,
-          cacheHit: true,
-          cellId: cell.id,
-          url: `${baseUrl}/img/${key}.png`,
-          key,
-          bytes: fs.statSync(png).size,
-          viewport: metaObj?.bbox || bbox || loadFitBBox(cell.id) || null,
-          width,
-          height,
-          dpi,
-          tile: tile || metaObj?.tile || null,
-          fit: loadFitBBox(cell.id),
-          cacheDir: path.join(cacheRoot, "tiles"),
-          meta: metaObj,
-        };
-      }
-
-      const tmpDir = path.join(cacheRoot, "_tmp", key);
+      const png = path.join(frameRoot, `${cell.id}.png`);
+      const tmpDir = path.join(frameRoot, "_tmp");
       fs.mkdirSync(tmpDir, { recursive: true });
       const t0 = Date.now();
       let stdout = "";
-      let sourceName = "PrintChart";
-      let painterMode = renderMode;
       let renderMs = null;
+      let modeUsed = renderMode;
+      let finalBBox = bbox;
 
       if (renderMode === "persistent" && persistentExe) {
         try {
-          const directPng = path.join(tmpDir, "frame.png");
+          const directPng = path.join(tmpDir, `${cell.id}-frame.png`);
           const result = await runPersistentRender(cell.path, directPng, width, height, dpi, bbox);
           stdout = result.stdout || "";
           renderMs = result.ms;
-          sourceName = "nautilus-renderer";
+          if (result.viewport) finalBBox = clampBBox(result.viewport);
           if (!fs.existsSync(directPng) || fs.statSync(directPng).size < 1000) {
             throw new Error("persistent PNG üretmedi");
           }
           fs.copyFileSync(directPng, png);
         } catch (err) {
-          log.warn(`persistent render failed → PrintChart fallback: ${err.message || err}`);
-          painterMode = "printchart-fallback";
+          log.warn(`persistent render failed → PrintChart: ${err.message || err}`);
+          modeUsed = "printchart-fallback";
           const result = await runPrintChart(cell.path, tmpDir, width, height, dpi, bbox);
           stdout = result.stdout;
           const produced = fs.readdirSync(tmpDir).find((f) => f.toLowerCase().endsWith(".png"));
           if (!produced) throw new Error("PrintChart PNG üretmedi");
           fs.copyFileSync(path.join(tmpDir, produced), png);
-          sourceName = produced;
+          finalBBox = bbox || parseBoundaries(stdout);
         }
       } else {
         const result = await runPrintChart(cell.path, tmpDir, width, height, dpi, bbox);
@@ -569,148 +436,42 @@ function createNautilusBridge({ port = 18768 } = {}) {
         const produced = fs.readdirSync(tmpDir).find((f) => f.toLowerCase().endsWith(".png"));
         if (!produced) throw new Error("PrintChart PNG üretmedi");
         fs.copyFileSync(path.join(tmpDir, produced), png);
-        sourceName = produced;
+        finalBBox = bbox || parseBoundaries(stdout);
+        modeUsed = "printchart";
       }
 
-      const parsed = parseBoundaries(stdout);
-      const finalBBox = bbox || parsed;
-      if (!tile && finalBBox) saveFitBBox(cell.id, finalBBox);
+      if (!finalBBox) finalBBox = parseBoundaries(stdout);
+      if (finalBBox && !bbox) cellFitBBox.set(cell.id, finalBBox);
 
-      const metaObj = {
-        cellId: cell.id,
-        cellPath: cell.path,
-        width,
-        height,
-        dpi,
-        painter: "Cairo",
-        renderMode: painterMode,
-        renderedAt: new Date().toISOString(),
-        ms: Date.now() - t0,
-        drawMs: renderMs,
-        sourceName,
-        bbox: finalBBox,
-        tile: tile
-          ? { z: tile.z, tx: tile.tx, ty: tile.ty }
-          : { z: 0, tx: 0, ty: 0 },
-        customViewport: !!bbox,
-      };
-      fs.writeFileSync(meta, JSON.stringify(metaObj, null, 2), "utf8");
-      try {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
-      } catch {
-        /* ignore */
-      }
-      log.info(`nautilus CACHE MISS ${key} ${metaObj.ms}ms → ${png}`);
+      frameRev += 1;
+      const ms = Date.now() - t0;
+      log.info(`nautilus DRAW ${cell.id} ${width}x${height} ${ms}ms mode=${modeUsed} drawMs=${renderMs ?? "-"}`);
+
       return {
         ok: true,
-        cacheHit: false,
         cellId: cell.id,
-        url: `${baseUrl}/img/${key}.png`,
-        key,
+        url: `${baseUrl}/frame/${cell.id}.png?r=${frameRev}`,
+        rev: frameRev,
         bytes: fs.statSync(png).size,
         viewport: finalBBox,
+        fit: cellFitBBox.get(cell.id) || finalBBox,
         width,
         height,
         dpi,
-        tile: metaObj.tile,
-        fit: loadFitBBox(cell.id),
-        cacheDir: path.join(cacheRoot, "tiles"),
-        meta: metaObj,
+        ms,
+        drawMs: renderMs,
+        renderMode: modeUsed,
       };
     })();
 
-    inFlight.set(key, work);
+    inFlight.set(flightKey, work);
     try {
       return await work;
     } finally {
-      inFlight.delete(key);
+      inFlight.delete(flightKey);
     }
   }
 
-  /** Fit bbox’u garantile — ilk açılışta TEK PrintChart; z0 karoya kopyala (çift çizim yok) */
-  async function ensureFit(cellId, width, height, dpi) {
-    const id = String(cellId || "").toUpperCase();
-    const bucket = bucketSize(width, height);
-    const fit = loadFitBBox(id);
-    if (fit) {
-      return ensureRender(id, {
-        width: bucket.width,
-        height: bucket.height,
-        dpi,
-        tile: { z: 0, tx: 0, ty: 0, bbox: fit },
-        bbox: fit,
-      });
-    }
-
-    const r = await ensureRender(id, { width: bucket.width, height: bucket.height, dpi });
-    if (!r.viewport) return r;
-    saveFitBBox(id, r.viewport);
-
-    const tile = { z: 0, tx: 0, ty: 0, bbox: r.viewport };
-    const z0key = cacheKey(id, bucket.width, bucket.height, dpi, r.viewport, tile);
-    if (r.key !== z0key) {
-      const from = cachePaths(r.key);
-      const to = cachePaths(z0key);
-      try {
-        if (fs.existsSync(from.png) && !fs.existsSync(to.png)) {
-          fs.copyFileSync(from.png, to.png);
-        }
-        if (fs.existsSync(from.meta)) {
-          const metaObj = {
-            ...JSON.parse(fs.readFileSync(from.meta, "utf8")),
-            tile: { z: 0, tx: 0, ty: 0 },
-          };
-          fs.writeFileSync(to.meta, JSON.stringify(metaObj, null, 2), "utf8");
-        }
-      } catch (e) {
-        log.warn("nautilus z0 copy", e);
-      }
-      return {
-        ...r,
-        key: z0key,
-        url: `${baseUrl}/img/${z0key}.png`,
-        tile: { z: 0, tx: 0, ty: 0 },
-        fit: r.viewport,
-      };
-    }
-    return { ...r, tile: { z: 0, tx: 0, ty: 0 }, fit: r.viewport };
-  }
-
-  async function ensureTile(cellId, opts = {}) {
-    const id = String(cellId || "").toUpperCase();
-    const bucket = bucketSize(opts.width, opts.height);
-    const dpi = Number(opts.dpi) || 96;
-    let fit = loadFitBBox(id);
-    if (!fit) {
-      const base = await ensureFit(id, bucket.width, bucket.height, dpi);
-      fit = base.viewport || loadFitBBox(id);
-    }
-    if (!fit) throw new Error("fit bbox yok");
-
-    const z = Math.max(0, Math.min(5, Math.round(Number(opts.z) || 0)));
-    const centerLon =
-      opts.centerLon != null ? Number(opts.centerLon) : (fit.west + fit.east) / 2;
-    const centerLat =
-      opts.centerLat != null ? Number(opts.centerLat) : (fit.north + fit.south) / 2;
-    const tile =
-      opts.tx != null && opts.ty != null
-        ? resolveTile(fit, z, fit.west + ((Number(opts.tx) + 0.5) * (fit.east - fit.west)) / (1 << z), fit.north - ((Number(opts.ty) + 0.5) * (fit.north - fit.south)) / (1 << z))
-        : resolveTile(fit, z, centerLon, centerLat);
-
-    const r = await ensureRender(id, {
-      width: bucket.width,
-      height: bucket.height,
-      dpi,
-      tile,
-      bbox: tile.bbox,
-    });
-    return { ...r, tile: { z: tile.z, tx: tile.tx, ty: tile.ty }, fit };
-  }
-
-  /**
-   * Screen → geo using the same equirectangular mapping PrintChart uses for N/S/W/E extents.
-   * Not a substitute for EnChartDisplay::DeviceToGeo, but matches our PNG viewport contract.
-   */
   function screenToGeo(viewport, width, height, x, y) {
     if (!viewport) throw new Error("viewport yok");
     const lon = viewport.west + (x / Math.max(1, width)) * (viewport.east - viewport.west);
@@ -756,28 +517,16 @@ function createNautilusBridge({ port = 18768 } = {}) {
     const width = Number(payload.width) || 1280;
     const height = Number(payload.height) || 720;
     const dpi = Number(payload.dpi) || 96;
+    const action = String(payload.action || "set");
 
-    if (payload.action === "fit") {
-      return ensureFit(cellId, width, height, dpi);
-    }
-
-    if (payload.action === "tile" || payload.action === "settle") {
-      return ensureTile(cellId, {
-        width,
-        height,
-        dpi,
-        z: payload.z,
-        tx: payload.tx,
-        ty: payload.ty,
-        centerLon: payload.centerLon,
-        centerLat: payload.centerLat,
-      });
+    if (action === "fit") {
+      return ensureRender(cellId, { width, height, dpi });
     }
 
     let bbox = payload.bbox
-      ? quantizeBBox(payload.bbox)
+      ? clampBBox(payload.bbox)
       : payload.north != null
-        ? quantizeBBox({
+        ? clampBBox({
             north: Number(payload.north),
             south: Number(payload.south),
             west: Number(payload.west),
@@ -785,35 +534,45 @@ function createNautilusBridge({ port = 18768 } = {}) {
           })
         : null;
 
-    if (payload.action === "pan" && payload.viewport) {
-      bbox = quantizeBBox(
-        panViewport(
-          clampBBox(payload.viewport),
-          width,
-          height,
-          Number(payload.dxPx) || 0,
-          Number(payload.dyPx) || 0
-        )
+    if (action === "pan" && payload.viewport) {
+      bbox = panViewport(
+        clampBBox(payload.viewport),
+        width,
+        height,
+        Number(payload.dxPx) || 0,
+        Number(payload.dyPx) || 0
       );
-    } else if (payload.action === "zoom" && payload.viewport) {
-      bbox = quantizeBBox(
-        zoomViewport(
-          clampBBox(payload.viewport),
-          width,
-          height,
-          Number(payload.factor) || 1,
-          Number(payload.anchorX) ?? width / 2,
-          Number(payload.anchorY) ?? height / 2
-        )
+    } else if (action === "zoom" && payload.viewport) {
+      bbox = zoomViewport(
+        clampBBox(payload.viewport),
+        width,
+        height,
+        Number(payload.factor) || 1,
+        Number(payload.anchorX) ?? width / 2,
+        Number(payload.anchorY) ?? height / 2
       );
+    }
+
+    // settle / set: UI'dan gelen coğrafi bbox → SetViewPort + Draw
+    if (!bbox && (action === "settle" || action === "set") && payload.centerLon != null) {
+      const fit = cellFitBBox.get(String(cellId || "").toUpperCase());
+      const scale = Math.max(0.25, Number(payload.scale) || 1);
+      const base = payload.viewport ? clampBBox(payload.viewport) : fit;
+      if (base) {
+        const lonSpan = (base.east - base.west) / scale;
+        const latSpan = (base.north - base.south) / scale;
+        bbox = clampBBox({
+          west: Number(payload.centerLon) - lonSpan / 2,
+          east: Number(payload.centerLon) + lonSpan / 2,
+          north: Number(payload.centerLat) + latSpan / 2,
+          south: Number(payload.centerLat) - latSpan / 2,
+        });
+      }
     }
 
     return ensureRender(cellId, { width, height, dpi, bbox: bbox || undefined });
   }
 
-  /**
-   * Geo pick always. ENC feature pick uses PickChart.exe when built; otherwise returns geo only.
-   */
   async function pickFeature(payload = {}) {
     const width = Number(payload.width) || 1280;
     const height = Number(payload.height) || 720;
@@ -833,15 +592,48 @@ function createNautilusBridge({ port = 18768 } = {}) {
       screen: { x, y },
       features: [],
       source: "geo-projection",
-      note: "ENC feature pick için PickChart / Qt PickReport; şimdilik coğrafi konum.",
     };
+
+    if (renderMode === "persistent" && persistentExe && cell) {
+      try {
+        await ensurePersistent();
+        if (persistent.loadedCell !== cell.path) {
+          await persistentRequest("loadCell", {
+            path: jsonPath(cell.path),
+            width,
+            height,
+            dpi: 96,
+          });
+          persistent.loadedCell = cell.path;
+        }
+        await persistentRequest("setViewport", {
+          north: viewport.north,
+          south: viewport.south,
+          west: viewport.west,
+          east: viewport.east,
+          width,
+          height,
+          dpi: 96,
+        });
+        const picked = await persistentRequest("pick", {
+          x: Math.round(x),
+          y: Math.round(y),
+          radius: Number(payload.radius) || 12,
+        });
+        if (picked.geo) result.geo = picked.geo;
+        if (picked.features) result.features = picked.features;
+        result.source = "nautilus-renderer";
+        return result;
+      } catch (e) {
+        result.note = `persistent pick: ${e.message || e}`;
+      }
+    }
 
     const exe = fs.existsSync(pickChartExe)
       ? pickChartExe
       : fs.existsSync(pickChartAlt)
         ? pickChartAlt
         : null;
-
     if (exe && cell) {
       try {
         const json = await runPickChart(exe, cell.path, width, height, 96, viewport, x, y);
@@ -855,7 +647,6 @@ function createNautilusBridge({ port = 18768 } = {}) {
         result.note = `PickChart hata: ${e.message || e}`;
       }
     }
-
     return result;
   }
 
@@ -927,9 +718,9 @@ function createNautilusBridge({ port = 18768 } = {}) {
           return;
         }
         const u = String(req.url || "").split("?")[0];
-        const m = /^\/img\/([A-Za-z0-9_-]+)\.png$/i.exec(u);
+        const m = /^\/frame\/([A-Za-z0-9_-]+)\.png$/i.exec(u);
         if (m) {
-          const file = path.join(cacheRoot, "tiles", `${m[1]}.png`);
+          const file = path.join(frameRoot, `${m[1].toUpperCase()}.png`);
           if (!fs.existsSync(file)) {
             res.writeHead(404);
             res.end("missing");
@@ -939,14 +730,21 @@ function createNautilusBridge({ port = 18768 } = {}) {
           res.writeHead(200, {
             "Content-Type": "image/png",
             "Content-Length": buf.length,
-            "Cache-Control": "public, max-age=86400",
+            "Cache-Control": "no-store",
           });
           res.end(buf);
           return;
         }
         if (u === "/health") {
           res.writeHead(200, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ ok: true, cells: cells.size, cache: cacheStats() }));
+          res.end(
+            JSON.stringify({
+              ok: true,
+              cells: cells.size,
+              renderMode,
+              persistentAlive: !!(persistent.proc && !persistent.proc.killed),
+            })
+          );
           return;
         }
         res.writeHead(404);
@@ -968,7 +766,7 @@ function createNautilusBridge({ port = 18768 } = {}) {
           listenPort = addr.port;
           baseUrl = `http://127.0.0.1:${listenPort}`;
         }
-        log.info(`nautilus image server ${baseUrl}`);
+        log.info(`nautilus frame server ${baseUrl} · mode=${renderMode}`);
         resolve(baseUrl);
       });
     });
@@ -985,12 +783,12 @@ function createNautilusBridge({ port = 18768 } = {}) {
       persistentAlive: !!(persistent.proc && !persistent.proc.killed),
       baseUrl,
       cells: cells.size,
-      cache: cacheStats(),
+      frameRoot,
       d2: {
         viewportIpc: true,
         panZoom: true,
         geoPick: true,
-        encPick: fs.existsSync(pickChartExe) || fs.existsSync(pickChartAlt),
+        encPick: true,
       },
     };
   }
@@ -1011,15 +809,12 @@ function createNautilusBridge({ port = 18768 } = {}) {
     rescan,
     list,
     ensureRender,
-    ensureTile,
-    ensureFit,
     setViewport,
     pickFeature,
     screenToGeo,
     geoToScreen,
     startServer,
     status,
-    cacheStats,
     stop,
     get baseUrl() {
       return baseUrl;

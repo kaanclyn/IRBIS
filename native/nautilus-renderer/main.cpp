@@ -202,24 +202,33 @@ struct Session
     }
   }
 
+  void syncBoundsFromDisplay()
+  {
+    const auto c_r2d = 180.0 / Nautilus::EN_PI;
+    auto box = display->GetViewPort().CalcBoundingRectangle();
+    north = box.GetNorth() * c_r2d;
+    south = box.GetSouth() * c_r2d;
+    west = box.GetWest() * c_r2d;
+    east = box.GetEast() * c_r2d;
+    hasViewport = true;
+  }
+
+  // Nautilus model: Init(center, rangeMeters) — range = half of HEIGHT.
+  // Stored N/S/W/E always = CalcBoundingRectangle after SetViewPort (not the request box).
   void setViewportDeg(double n, double s, double w, double e)
   {
-    north = n;
-    south = s;
-    west = w;
-    east = e;
     Nautilus::Geodesy::EnGeoRectangle box(
-      Nautilus::EN_PI * south / 180.0,
-      Nautilus::EN_PI * west / 180.0,
-      Nautilus::EN_PI * north / 180.0,
-      Nautilus::EN_PI * east / 180.0);
+      Nautilus::EN_PI * s / 180.0,
+      Nautilus::EN_PI * w / 180.0,
+      Nautilus::EN_PI * n / 180.0,
+      Nautilus::EN_PI * e / 180.0);
     const auto c_r2d = 180.0 / Nautilus::EN_PI;
     auto center = box.GetCenter();
     Nautilus::EnFloat64 range = box.GetHeight() * c_r2d * 60.0 / 2.0 * 1852.0;
     auto vp = display->GetViewPort();
     vp.Init(center, range, 0.0);
     display->SetViewPort(vp);
-    hasViewport = true;
+    syncBoundsFromDisplay();
   }
 
   void fitToCell()
@@ -233,11 +242,11 @@ struct Session
         box.AddRect(dataSet->GetBoundingRectangle());
     }
     const auto c_r2d = 180.0 / Nautilus::EN_PI;
-    north = box.GetNorth() * c_r2d;
-    south = box.GetSouth() * c_r2d;
-    west = box.GetWest() * c_r2d;
-    east = box.GetEast() * c_r2d;
-    setViewportDeg(north, south, west, east);
+    setViewportDeg(
+      box.GetNorth() * c_r2d,
+      box.GetSouth() * c_r2d,
+      box.GetWest() * c_r2d,
+      box.GetEast() * c_r2d);
   }
 };
 

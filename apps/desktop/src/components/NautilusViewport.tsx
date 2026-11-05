@@ -12,16 +12,15 @@ type GeoBBox = { north: number; south: number; west: number; east: number };
 
 type RenderInfo = {
   url: string;
-  cacheHit: boolean;
   cellId: string;
   bytes: number;
   viewport: GeoBBox | null;
   width: number;
   height: number;
-  cacheDir?: string;
-  tile?: { z: number; tx: number; ty: number } | null;
-  fit?: GeoBBox | null;
-  key?: string;
+  ms?: number;
+  drawMs?: number | null;
+  renderMode?: string;
+  rev?: number;
 };
 
 type PickHit = {
@@ -53,14 +52,28 @@ function stagePixelSize(el: HTMLElement | null) {
   };
 }
 
-function scaleToZ(scale: number) {
-  // Navionics benzeri: sürekli CSS scale → settle’da en yakın karo seviyesi
-  return Math.max(0, Math.min(5, Math.round(Math.log2(Math.max(0.5, scale)))));
+/** MapLibre-benzeri tekerlek → sürekli ölçek (atlama yok). */
+function wheelZoomFactor(e: WheelEvent) {
+  let dy = e.deltaY;
+  if (e.deltaMode === 1) dy *= 16; // lines
+  if (e.deltaMode === 2) dy *= 800; // pages
+  // ~ MapLibre scrollZoom hissi: küçük delta = pürüzsüz
+  const zoomDelta = (-dy / 240) * (e.ctrlKey ? 1.6 : 1);
+  return Math.pow(2, zoomDelta);
+}
+
+function preload(url: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve();
+    img.onerror = () => reject(new Error("frame load failed"));
+    img.src = url;
+  });
 }
 
 /**
- * Navionics modeli: sürükle/tekerlek = doğrusal CSS.
- * Bırakınca bakış z/x/y karosuna snap → disk PNG (aynı karoya dönüş = CACHE HIT).
+ * Navionics hissi: CSS ile sürekli pan/zoom; settle’da yeni frame
+ * decode edilene kadar eski görüntü + transform kalır → atlama yok.
  */
 export function NautilusViewport({
   cellId,
@@ -92,13 +105,12 @@ export function NautilusViewport({
   const dragRef = useRef<{ x: number; y: number; moved: boolean; origin: Cam } | null>(null);
   const camRef = useRef<Cam>({ x: 0, y: 0, scale: 1 });
   const baseVpRef = useRef<GeoBBox | null>(null);
-  const fitRef = useRef<GeoBBox | null>(null);
-  const tileRef = useRef<{ z: number; tx: number; ty: number } | null>(null);
   const infoRef = useRef<RenderInfo | null>(null);
   const sizeRef = useRef({ width: 1280, height: 720 });
   const loadSeq = useRef(0);
+  /** Her pan/zoom jesti — render ortasında cam değişirse commit iptal */
+  const gestureGen = useRef(0);
   const settleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastTileKey = useRef<string>("");
 
   const [busy, setBusy] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -118,8 +130,8 @@ export function NautilusViewport({
     if (!vp || !inf || !stage) return null;
     const c = camRef.current;
     const sr = stage.getBoundingClientRect();
-    const lx = (sr.width / 2 - sr.width / 2 - c.x) / c.scale + sr.width / 2;
-    const ly = (sr.height / 2 - sr.height / 2 - c.y) / c.scale + sr.height / 2;
+    const lx = -c.x / c.scale + sr.width / 2;
+    const ly = -c.y / c.scale + sr.height / 2;
     const px = (lx / sr.width) * inf.width;
     const py = (ly / sr.height) * inf.height;
     return {
@@ -128,65 +140,91 @@ export function NautilusViewport({
     };
   }, []);
 
-  const applyRender = useCallback((r: RenderInfo & { key?: string; fit?: GeoBBox | null }) => {
+  /** CSS scale → geo: mevcut PNG’nin N/S/W/E’sini aynı oranda küçült (Nautilus Init ile uyumlu). */
+  const visibleBBox = useCallback((): GeoBBox | null => {
+    const vp = baseVpRef.current;
+    const center = viewCenter();
+    if (!vp || !center) return null;
+    const scale = Math.max(0.25, camRef.current.scale);
+    // Uniform CSS zoom → her iki eksen 1/scale (ekrandaki PNG kırpımı)
+    const lonSpan = (vp.east - vp.west) / scale;
+    const latSpan = (vp.north - vp.south) / scale;
+    return {
+      west: center.lon - lonSpan / 2,
+      east: center.lon + lonSpan / 2,
+      north: center.lat + latSpan / 2,
+      south: center.lat - latSpan / 2,
+    };
+  }, [viewCenter]);
+
+  /** Yeni frame hazır olunca tek karede URL + cam reset → görsel süreklilik */
+  const commitFrame = useCallback(async (r: RenderInfo, resetCam: boolean) => {
+    try {
+      await preload(r.url);
+    } catch {
+      /* yine de göster */
+    }
     const vp = r.viewport ?? null;
     baseVpRef.current = vp;
-    if (r.fit) fitRef.current = r.fit;
-    else if (r.tile?.z === 0 && vp) fitRef.current = vp;
-    tileRef.current = r.tile || { z: 0, tx: 0, ty: 0 };
-    lastTileKey.current = r.key || "";
     const next: RenderInfo = {
       url: r.url,
-      cacheHit: r.cacheHit,
       cellId: r.cellId,
       bytes: r.bytes,
       viewport: vp,
       width: r.width,
       height: r.height,
-      cacheDir: r.cacheDir,
-      tile: tileRef.current,
-      fit: fitRef.current,
-      key: r.key,
+      ms: r.ms,
+      drawMs: r.drawMs,
+      renderMode: r.renderMode,
+      rev: r.rev,
     };
     infoRef.current = next;
     setInfo(next);
-    setCamBoth({ x: 0, y: 0, scale: 1 });
+    if (resetCam) setCamBoth({ x: 0, y: 0, scale: 1 });
     setPick(null);
   }, []);
 
-  const loadTile = useCallback(
-    async (opts: { action: "fit" | "settle"; z?: number; centerLon?: number; centerLat?: number }) => {
+  const redraw = useCallback(
+    async (opts: { action: "fit" | "set"; bbox?: GeoBBox | null }) => {
       if (!window.irbis?.nautilusSetViewport) throw new Error("Nautilus API yok");
       const seq = ++loadSeq.current;
+      const genAtStart = gestureGen.current;
+      const camAtStart = { ...camRef.current };
       setBusy(true);
       setErr(null);
       sizeRef.current = stagePixelSize(stageRef.current);
       const { width, height } = sizeRef.current;
       try {
-        const r = (await window.irbis.nautilusSetViewport({
-          cellId: cellId || undefined,
-          width,
-          height,
-          dpi: 96,
-          action: opts.action === "fit" ? "fit" : "settle",
-          z: opts.z,
-          centerLon: opts.centerLon,
-          centerLat: opts.centerLat,
-        })) as RenderInfo & { key?: string };
-
+        const payload =
+          opts.action === "fit"
+            ? { cellId: cellId || undefined, width, height, dpi: 96, action: "fit" as const }
+            : {
+                cellId: cellId || undefined,
+                width,
+                height,
+                dpi: 96,
+                action: "set" as const,
+                bbox: opts.bbox || undefined,
+                north: opts.bbox?.north,
+                south: opts.bbox?.south,
+                west: opts.bbox?.west,
+                east: opts.bbox?.east,
+              };
+        const r = (await window.irbis.nautilusSetViewport(payload)) as RenderInfo;
         if (seq !== loadSeq.current) return;
-
-        // Aynı karo tekrar istenmişse (cache key aynı) CSS sıfırla, yeniden çizme hissi yok
-        if (r.key && r.key === lastTileKey.current && infoRef.current) {
-          setCamBoth({ x: 0, y: 0, scale: 1 });
-          setBusy(false);
-          if (r.cacheHit) {
-            setInfo((prev) => (prev ? { ...prev, cacheHit: true } : prev));
-          }
+        // Render sırasında kullanıcı zoom’a devam ettiyse bu frame’i basma — yeniden settle
+        if (genAtStart !== gestureGen.current) {
+          scheduleRedrawRef.current?.();
           return;
         }
-
-        applyRender(r);
+        await commitFrame(r, true);
+        // Commit sonrası cam hâlâ jestten kalmışsa (nadir) temizle
+        if (
+          Math.abs(camRef.current.x - camAtStart.x) > 2 ||
+          Math.abs(camRef.current.scale / Math.max(1e-6, camAtStart.scale) - 1) > 0.04
+        ) {
+          scheduleRedrawRef.current?.();
+        }
       } catch (e) {
         if (seq !== loadSeq.current) return;
         setErr(String((e as { message?: string })?.message || e));
@@ -194,44 +232,34 @@ export function NautilusViewport({
         if (seq === loadSeq.current) setBusy(false);
       }
     },
-    [applyRender, cellId]
+    [cellId, commitFrame]
   );
 
-  const scheduleSettle = useCallback(() => {
+  const scheduleRedrawRef = useRef<(() => void) | null>(null);
+
+  const scheduleRedraw = useCallback(() => {
     if (settleTimer.current) clearTimeout(settleTimer.current);
+    // Zoom sürerken CSS akar (Navionics karo akışı gibi); durunca tek native frame
     settleTimer.current = setTimeout(() => {
       const c = camRef.current;
-      const center = viewCenter();
-      if (!center) return;
-      const z = scaleToZ(c.scale);
-      // neredeyse kimlik ve z aynı → dokunma
-      const cur = tileRef.current;
-      if (
-        Math.abs(c.x) < 3 &&
-        Math.abs(c.y) < 3 &&
-        Math.abs(c.scale - 1) < 0.05 &&
-        cur &&
-        cur.z === z
-      ) {
+      if (Math.abs(c.x) < 1.5 && Math.abs(c.y) < 1.5 && Math.abs(c.scale - 1) < 0.02) {
         setCamBoth({ x: 0, y: 0, scale: 1 });
         return;
       }
-      void loadTile({
-        action: "settle",
-        z,
-        centerLon: center.lon,
-        centerLat: center.lat,
-      });
-    }, 280);
-  }, [loadTile, viewCenter]);
+      const bbox = visibleBBox();
+      if (!bbox) return;
+      void redraw({ action: "set", bbox });
+    }, 450);
+  }, [redraw, visibleBBox]);
+
+  scheduleRedrawRef.current = scheduleRedraw;
 
   useEffect(() => {
-    lastTileKey.current = "";
-    void loadTile({ action: "fit" });
+    void redraw({ action: "fit" });
     return () => {
       if (settleTimer.current) clearTimeout(settleTimer.current);
     };
-  }, [cellId, reloadToken, loadTile]);
+  }, [cellId, reloadToken, redraw]);
 
   const screenToPngPx = useCallback((clientX: number, clientY: number) => {
     const stage = stageRef.current;
@@ -251,7 +279,6 @@ export function NautilusViewport({
     return { x, y };
   }, []);
 
-  // Doğrusal zoom: küçük adımlar, busy olsa bile CSS akar; settle karo çeker
   useEffect(() => {
     const el = stageRef.current;
     if (!el) return;
@@ -259,12 +286,13 @@ export function NautilusViewport({
       e.preventDefault();
       e.stopPropagation();
       if (!infoRef.current) return;
-      const step = e.deltaY < 0 ? 1.04 : 1 / 1.04;
+      const factor = wheelZoomFactor(e);
       const sr = el.getBoundingClientRect();
       const mx = e.clientX - sr.left;
       const my = e.clientY - sr.top;
       const c = camRef.current;
-      const nextScale = Math.min(12, Math.max(0.4, c.scale * step));
+      const nextScale = Math.min(24, Math.max(0.3, c.scale * factor));
+      if (Math.abs(nextScale - c.scale) < 1e-4) return;
       const cx = sr.width / 2;
       const cy = sr.height / 2;
       const ratio = nextScale / c.scale;
@@ -273,11 +301,11 @@ export function NautilusViewport({
         y: c.y + (my - cy) * (1 - ratio),
         scale: nextScale,
       });
-      scheduleSettle();
+      scheduleRedraw();
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
-  }, [scheduleSettle]);
+  }, [scheduleRedraw]);
 
   const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
@@ -320,7 +348,7 @@ export function NautilusViewport({
     dragRef.current = null;
     if (!drag) return;
     if (drag.moved) {
-      scheduleSettle();
+      scheduleRedraw();
       return;
     }
     const pt = screenToPngPx(e.clientX, e.clientY);
@@ -347,8 +375,8 @@ export function NautilusViewport({
         lat: hit.geo?.lat,
         lon: hit.geo?.lon,
       });
-    } catch (err) {
-      setErr(String((err as { message?: string })?.message || err));
+    } catch (error) {
+      setErr(String((error as { message?: string })?.message || error));
     }
   };
 
@@ -379,9 +407,8 @@ export function NautilusViewport({
     return out;
   }, [aisTargets, aisVisible, headingDeg, info?.viewport, ownShip, radarVisible]);
 
-  const tileLabel = info?.tile ? `z${info.tile.z}/${info.tile.tx}/${info.tile.ty}` : "—";
   const chromeRight = info
-    ? `${info.cellId} · ${tileLabel} · ${info.cacheHit ? "CACHE" : "DRAW"} · ×${cam.scale.toFixed(2)}`
+    ? `${info.cellId} · ${info.renderMode || "draw"} · ${info.drawMs ?? info.ms ?? "—"}ms · ×${cam.scale.toFixed(2)}`
     : busy
       ? "…"
       : "—";
@@ -390,9 +417,9 @@ export function NautilusViewport({
     <div className="nautilus-viewport">
       <div className="nautilus-viewport-chrome">
         <strong>Nautilus ENC</strong>
-        <span title={info?.cacheDir || ""}>{chromeRight}</span>
+        <span>{chromeRight}</span>
         <div className="nautilus-viewport-actions">
-          <button type="button" disabled={busy} onClick={() => void loadTile({ action: "fit" })}>
+          <button type="button" disabled={busy && !info} onClick={() => void redraw({ action: "fit" })}>
             Fit
           </button>
         </div>
@@ -405,14 +432,14 @@ export function NautilusViewport({
         onPointerUp={(e) => void onPointerUp(e)}
       >
         {busy && !info ? (
-          <div className="nautilus-viewport-empty">İlk karo çiziliyor…</div>
+          <div className="nautilus-viewport-empty">ENC yükleniyor…</div>
         ) : err && !info ? (
           <div className="nautilus-viewport-empty error">{err}</div>
         ) : info ? (
           <>
             <div
               className="nautilus-layer"
-              style={{ transform: `translate(${cam.x}px, ${cam.y}px) scale(${cam.scale})` }}
+              style={{ transform: `translate3d(${cam.x}px, ${cam.y}px, 0) scale(${cam.scale})` }}
             >
               <img className="nautilus-viewport-img" src={info.url} alt={info.cellId} draggable={false} />
               <div className="nautilus-overlay">
@@ -446,8 +473,7 @@ export function NautilusViewport({
                 ) : null}
               </div>
             </div>
-            {busy ? <div className="nautilus-busy">karo…</div> : null}
-            {info.cacheHit && !busy ? <div className="nautilus-cache-badge">disk cache</div> : null}
+            {busy ? <div className="nautilus-busy">yenileniyor…</div> : null}
           </>
         ) : (
           <div className="nautilus-viewport-empty">ENC yok</div>

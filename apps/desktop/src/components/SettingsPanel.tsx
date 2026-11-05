@@ -182,8 +182,8 @@ export function SettingsPanel({
                 ))}
               </div>
               <p className="settings-muted tight">
-                Geçiş: Navionics karo ↔ Nautilus ENC. Nautilus karoları z/x/y PNG olarak
-                userData/nautilus-cache/tiles altında; aynı karoya dönüş = cache hit.
+                Navionics = offline karo. Nautilus = kalıcı C++ renderer (SetViewPort + Draw);
+                disk tile cache yok.
               </p>
             </section>
 
