@@ -1,20 +1,45 @@
 /**
- * Mock / simulation scenario from AISveGPS.pcapng (Tuzla / İzmit Körfezi capture).
- * Used when no live UDP NMEA arrives on :10110.
+ * Mock / simulation scenario.
+ * Idle AIS from AISveGPS.pcapng (Tuzla). Cruise route sits inside sample ENC GB5X01NW.
  */
 
-/** Own ship (GPS + AIVDO) */
+/**
+ * Seyir rotası — GB5X01NW fit bbox içinde (~Mauritius doğusu örnek hücre).
+ * Döngü: son → ilk.
+ * @type {Array<{lat:number,lon:number,name?:string}>}
+ */
+/** Dönemeçli test rotası — sağa/sola kırılımlı (ENC GB5X01NW içi) */
+const CRUISE_ROUTE = [
+  { lat: -32.500, lon: 60.880, name: "START" },
+  { lat: -32.496, lon: 60.892, name: "WP1" },
+  { lat: -32.488, lon: 60.898, name: "WP2" },
+  { lat: -32.482, lon: 60.910, name: "WP3" },
+  { lat: -32.490, lon: 60.920, name: "WP4" },
+  { lat: -32.478, lon: 60.928, name: "WP5" },
+  { lat: -32.472, lon: 60.940, name: "WP6" },
+  { lat: -32.482, lon: 60.952, name: "WP7" },
+  { lat: -32.494, lon: 60.958, name: "WP8" },
+  { lat: -32.506, lon: 60.948, name: "WP9" },
+  { lat: -32.512, lon: 60.932, name: "WP10" },
+  { lat: -32.504, lon: 60.918, name: "WP11" },
+  { lat: -32.514, lon: 60.905, name: "WP12" },
+  { lat: -32.508, lon: 60.890, name: "WP13" },
+];
+
+/** Own ship — cruise başlangıcı (ENC üzerinde görünür) */
 const OWN = {
   name: "IRBIS OWN",
-  /** From GPRMC / AIVDO in pcap */
-  lat: 40.82281,
-  lon: 29.2768,
-  sogKn: 0.05,
-  cogDegTrue: 301,
-  headingDegTrue: 300.9,
-  headingDegMagnetic: 300.9,
-  depthM: 12.4,
+  lat: CRUISE_ROUTE[0].lat,
+  lon: CRUISE_ROUTE[0].lon,
+  sogKn: 0,
+  cogDegTrue: 55,
+  headingDegTrue: 55,
+  headingDegMagnetic: 55,
+  depthM: 18.2,
 };
+
+const CRUISE_DEFAULT_SPEED_KN = 12;
+const CRUISE_MAX_SPEED_KN = 80;
 
 /**
  * AIS targets with last known positions from the capture.
@@ -367,4 +392,10 @@ const AIS_TARGETS = [
   },
 ];
 
-module.exports = { OWN, AIS_TARGETS };
+module.exports = {
+  OWN,
+  AIS_TARGETS,
+  CRUISE_ROUTE,
+  CRUISE_DEFAULT_SPEED_KN,
+  CRUISE_MAX_SPEED_KN,
+};

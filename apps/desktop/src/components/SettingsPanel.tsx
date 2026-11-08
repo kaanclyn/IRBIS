@@ -3,8 +3,9 @@ import type { useCameras } from "../hooks/useCameras";
 import type { CamLayout, CamLayoutState, CamSlot } from "../camera/cameraLayout";
 import { CAM_DRAG_MIME } from "../camera/cameraLayout";
 import { CamDragChip } from "./CameraWall";
+import { SimCruiseBar } from "./SimCruiseBar";
 
-export type SettingsTab = "seyir" | "kamera" | "radar" | "genel";
+export type SettingsTab = "seyir" | "sim" | "kamera" | "radar" | "genel";
 type MapEngine = "navionics" | "nautilus";
 
 type DiscoverHit = {
@@ -15,6 +16,7 @@ type DiscoverHit = {
 
 const TABS: { id: SettingsTab; label: string }[] = [
   { id: "seyir", label: "Seyir" },
+  { id: "sim", label: "Sim" },
   { id: "kamera", label: "Kamera" },
   { id: "radar", label: "Radar" },
   { id: "genel", label: "Genel" },
@@ -29,6 +31,11 @@ export function SettingsPanel({
   onClose,
   onNote,
   onMapEngineChange,
+  followOwn,
+  onFollowChange,
+  onRoute,
+  onSimRunningChange,
+  initialTab = "seyir",
 }: {
   cams: Cams;
   camLayout: CamLayoutState;
@@ -36,8 +43,13 @@ export function SettingsPanel({
   onClose: () => void;
   onNote: (msg: string) => void;
   onMapEngineChange?: () => void;
+  followOwn?: boolean;
+  onFollowChange?: (v: boolean) => void;
+  onRoute?: (route: Array<{ lat: number; lon: number; name?: string | null }>) => void;
+  onSimRunningChange?: (running: boolean) => void;
+  initialTab?: SettingsTab;
 }) {
-  const [tab, setTab] = useState<SettingsTab>("seyir");
+  const [tab, setTab] = useState<SettingsTab>(initialTab);
   const [host, setHost] = useState("");
   const [port, setPort] = useState("80");
   const [user, setUser] = useState("admin");
@@ -427,6 +439,20 @@ export function SettingsPanel({
                 </div>
               ) : null}
             </section>
+          </div>
+        ) : null}
+
+        {tab === "sim" ? (
+          <div className="settings-pane settings-cam">
+            <SimCruiseBar
+              follow={!!followOwn}
+              onFollowChange={(v) => {
+                onFollowChange?.(v);
+                if (v) onNote("Harita takibi açık");
+              }}
+              onRoute={onRoute}
+              onRunningChange={onSimRunningChange}
+            />
           </div>
         ) : null}
 

@@ -1,10 +1,57 @@
 const dgram = require("node:dgram");
 const { createAisAssembler } = require("./aisDecode.cjs");
-const { OWN: SIM_OWN, AIS_TARGETS: SIM_AIS } = require("./simScenario.cjs");
+const {
+  OWN: SIM_OWN,
+  AIS_TARGETS: SIM_AIS,
+  CRUISE_ROUTE,
+  CRUISE_DEFAULT_SPEED_KN,
+  CRUISE_MAX_SPEED_KN,
+} = require("./simScenario.cjs");
+
+const MAX_SPEED_KN = Number(CRUISE_MAX_SPEED_KN) || 80;
+/** Max rate of turn for sim heading (deg/s) — ani sıçrama yok */
+const MAX_ROT_DEG_S = 45;
 
 const DEFAULT_PORT = 10110;
 const LIVE_IDLE_MS = 2500;
 const AIS_LOST_MS = 60000;
+const EARTH_R_M = 6371000;
+
+function haversineM(lat1, lon1, lat2, lon2) {
+  const φ1 = (lat1 * Math.PI) / 180;
+  const φ2 = (lat2 * Math.PI) / 180;
+  const Δφ = ((lat2 - lat1) * Math.PI) / 180;
+  const Δλ = ((lon2 - lon1) * Math.PI) / 180;
+  const a = Math.sin(Δφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2;
+  return 2 * EARTH_R_M * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
+function bearingDeg(lat1, lon1, lat2, lon2) {
+  const φ1 = (lat1 * Math.PI) / 180;
+  const φ2 = (lat2 * Math.PI) / 180;
+  const Δλ = ((lon2 - lon1) * Math.PI) / 180;
+  const y = Math.sin(Δλ) * Math.cos(φ2);
+  const x = Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
+  return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
+}
+
+function destinationPoint(lat, lon, brgDeg, distM) {
+  const δ = distM / EARTH_R_M;
+  const θ = (brgDeg * Math.PI) / 180;
+  const φ1 = (lat * Math.PI) / 180;
+  const λ1 = (lon * Math.PI) / 180;
+  const φ2 = Math.asin(Math.sin(φ1) * Math.cos(δ) + Math.cos(φ1) * Math.sin(δ) * Math.cos(θ));
+  const λ2 =
+    λ1 +
+    Math.atan2(
+      Math.sin(θ) * Math.sin(δ) * Math.cos(φ1),
+      Math.cos(δ) - Math.sin(φ1) * Math.sin(φ2)
+    );
+  return {
+    lat: (φ2 * 180) / Math.PI,
+    lon: (((λ2 * 180) / Math.PI + 540) % 360) - 180,
+  };
+}
 
 function checksumOk(sentence) {
   const star = sentence.lastIndexOf("*");
@@ -136,6 +183,115 @@ function createNmeaService(opts) {
   let simTimer = null;
   let publishTimer = null;
 
+  /** Cruise sim: kullanıcı Başlat deyince rota boyunca ilerler */
+  const cruise = {
+    running: false,
+    speedKn: CRUISE_DEFAULT_SPEED_KN,
+    /** @type {number} */
+    lat: SIM_OWN.lat,
+    /** @type {number} */
+    lon: SIM_OWN.lon,
+    heading: SIM_OWN.headingDegTrue,
+    cog: SIM_OWN.cogDegTrue,
+    segIndex: 0,
+    lastTickMs: 0,
+  };
+
+  function cruiseStatus() {
+    const route = CRUISE_ROUTE || [];
+    return {
+      running: cruise.running,
+      speedKn: cruise.speedKn,
+      segIndex: cruise.segIndex,
+      waypointCount: route.length,
+      lat: cruise.lat,
+      lon: cruise.lon,
+      route: route.map((w) => ({ lat: w.lat, lon: w.lon, name: w.name || null })),
+    };
+  }
+
+  function clampSpeed(kn) {
+    return Math.max(0.5, Math.min(MAX_SPEED_KN, kn));
+  }
+
+  function turnToward(current, target, maxDelta) {
+    const d = ((target - current + 540) % 360) - 180;
+    if (Math.abs(d) <= maxDelta) return ((target % 360) + 360) % 360;
+    return ((current + Math.sign(d) * maxDelta) % 360 + 360) % 360;
+  }
+
+  function controlSim(cmd = {}) {
+    const action = String(cmd.action || "").toLowerCase();
+    if (action === "start" || action === "resume") {
+      cruise.running = true;
+      cruise.lastTickMs = Date.now();
+      if (Number.isFinite(Number(cmd.speedKn))) {
+        cruise.speedKn = clampSpeed(Number(cmd.speedKn));
+      }
+      // Sadece açık reset/restart → başa al. Durdur→Başlat kaldığı yerden.
+      if ((cmd.reset === true || action === "restart") && CRUISE_ROUTE?.length) {
+        cruise.segIndex = 0;
+        cruise.lat = CRUISE_ROUTE[0].lat;
+        cruise.lon = CRUISE_ROUTE[0].lon;
+        const nxt = CRUISE_ROUTE[1] || CRUISE_ROUTE[0];
+        cruise.heading = bearingDeg(cruise.lat, cruise.lon, nxt.lat, nxt.lon);
+        cruise.cog = cruise.heading;
+      }
+    } else if (action === "restart") {
+      cruise.running = true;
+      cruise.lastTickMs = Date.now();
+      if (Number.isFinite(Number(cmd.speedKn))) cruise.speedKn = clampSpeed(Number(cmd.speedKn));
+      if (CRUISE_ROUTE?.length) {
+        cruise.segIndex = 0;
+        cruise.lat = CRUISE_ROUTE[0].lat;
+        cruise.lon = CRUISE_ROUTE[0].lon;
+        const nxt = CRUISE_ROUTE[1] || CRUISE_ROUTE[0];
+        cruise.heading = bearingDeg(cruise.lat, cruise.lon, nxt.lat, nxt.lon);
+        cruise.cog = cruise.heading;
+      }
+    } else if (action === "stop") {
+      cruise.running = false;
+    } else if (action === "setSpeed" || action === "speed") {
+      const kn = Number(cmd.speedKn);
+      if (Number.isFinite(kn)) cruise.speedKn = clampSpeed(kn);
+    } else if (action === "status") {
+      /* no-op */
+    }
+    return cruiseStatus();
+  }
+
+  function advanceCruise(nowMs) {
+    const route = CRUISE_ROUTE;
+    if (!route?.length) return;
+    if (!cruise.lastTickMs) cruise.lastTickMs = nowMs;
+    const dt = Math.min(1, Math.max(0, (nowMs - cruise.lastTickMs) / 1000));
+    cruise.lastTickMs = nowMs;
+    if (!cruise.running || dt <= 0) return;
+
+    let remainM = (cruise.speedKn * 1852) / 3600 * dt;
+    let targetBrg = cruise.heading;
+    let guard = 0;
+    while (remainM > 0 && guard++ < 48) {
+      const b = route[(cruise.segIndex + 1) % route.length];
+      targetBrg = bearingDeg(cruise.lat, cruise.lon, b.lat, b.lon);
+      const toWp = haversineM(cruise.lat, cruise.lon, b.lat, b.lon);
+      if (toWp <= remainM || toWp < 2) {
+        cruise.lat = b.lat;
+        cruise.lon = b.lon;
+        remainM -= toWp;
+        cruise.segIndex = (cruise.segIndex + 1) % route.length;
+        continue;
+      }
+      const next = destinationPoint(cruise.lat, cruise.lon, targetBrg, remainM);
+      cruise.lat = next.lat;
+      cruise.lon = next.lon;
+      remainM = 0;
+    }
+    // Heading yumuşak döner (ani 77→128 yok)
+    cruise.heading = turnToward(cruise.heading, targetBrg, MAX_ROT_DEG_S * dt);
+    cruise.cog = cruise.heading;
+  }
+
   function upsertAis(decoded, at, source) {
     if (!decoded?.mmsi) return;
     const prev = targets.get(decoded.mmsi) || { mmsi: decoded.mmsi };
@@ -249,22 +405,38 @@ function createNmeaService(opts) {
   function tickSim() {
     if (Date.now() - lastUdpMs < LIVE_IDLE_MS && lastUdpMs > 0) return;
     const now = new Date();
-    const t = now.getTime() / 1000;
+    const nowMs = now.getTime();
+    const t = nowMs / 1000;
     const at = now.toISOString();
-    const source = "sim:pcap-tuzla";
-    // Own ship from AISveGPS.pcapng (Tuzla / İzmit Körfezi)
-    const lat = SIM_OWN.lat + Math.sin(t / 90) * 0.00002;
-    const lon = SIM_OWN.lon + Math.cos(t / 95) * 0.00002;
+    const source = cruise.running ? "sim:cruise" : "sim:idle";
+
+    advanceCruise(nowMs);
+
+    const lat = cruise.running
+      ? cruise.lat
+      : cruise.lat + Math.sin(t / 90) * 0.00001;
+    const lon = cruise.running
+      ? cruise.lon
+      : cruise.lon + Math.cos(t / 95) * 0.00001;
+    const sog = cruise.running ? cruise.speedKn : 0;
+    const hdg = cruise.heading;
+    const cog = cruise.cog;
+
     state = applyPatch(
-      { ...state, mode: "simulation", simScenario: "AISveGPS.pcapng" },
+      {
+        ...state,
+        mode: "simulation",
+        simScenario: cruise.running ? "cruise-gb5x01nw" : "idle",
+        simCruise: cruiseStatus(),
+      },
       {
         lat,
         lon,
-        sogKn: SIM_OWN.sogKn,
-        depthM: SIM_OWN.depthM + Math.sin(t / 20) * 0.15,
-        cogDegTrue: SIM_OWN.cogDegTrue,
-        headingDegTrue: SIM_OWN.headingDegTrue,
-        headingDegMagnetic: SIM_OWN.headingDegMagnetic,
+        sogKn: sog,
+        depthM: SIM_OWN.depthM + Math.sin(t / 20) * 0.2,
+        cogDegTrue: cog,
+        headingDegTrue: hdg,
+        headingDegMagnetic: hdg,
       },
       source,
       at,
@@ -292,7 +464,7 @@ function createNmeaService(opts) {
       msgCountWindow = 0;
     }, 1000);
 
-    simTimer = setInterval(tickSim, 500);
+    simTimer = setInterval(tickSim, 200);
     publishTimer = setInterval(publish, 250);
     tickSim();
     publish();
@@ -311,14 +483,14 @@ function createNmeaService(opts) {
   }
 
   function getState() {
-    return { ...state, checksumErrors, udpPort: port };
+    return { ...state, checksumErrors, udpPort: port, simCruise: cruiseStatus() };
   }
 
   function getAis() {
     return { targets: targetsList(), count: targets.size };
   }
 
-  return { start, stop, getState, getAis, port };
+  return { start, stop, getState, getAis, controlSim, cruiseStatus, port };
 }
 
 module.exports = { createNmeaService, DEFAULT_PORT };

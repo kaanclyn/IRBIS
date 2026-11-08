@@ -265,6 +265,8 @@ function createNautilusBridge({ port = 18768 } = {}) {
     /** @type {GeoBBox | null} */
     lastViewport: null,
     starting: null,
+    /** Uygulama kapanırken / stop() — exit warn basma */
+    stopping: false,
   };
 
   function jsonPath(p) {
@@ -339,9 +341,21 @@ function createNautilusBridge({ port = 18768 } = {}) {
         const t = d.toString().trim();
         if (t) log.info(`nautilus-renderer: ${t}`);
       });
-      proc.on("exit", (code) => {
-        log.warn(`nautilus-renderer exit ${code}`);
-        for (const [, p] of persistent.pending) p.reject(new Error("renderer exited"));
+      proc.on("exit", (code, signal) => {
+        const intentional = persistent.stopping;
+        persistent.stopping = false;
+        if (intentional) {
+          log.info(
+            `nautilus-renderer stopped (shutdown) code=${code ?? "null"} signal=${signal ?? "null"}`
+          );
+        } else {
+          log.warn(
+            `nautilus-renderer exit unexpected code=${code ?? "null"} signal=${signal ?? "null"}`
+          );
+        }
+        for (const [, p] of persistent.pending) {
+          p.reject(new Error(intentional ? "renderer stopped" : "renderer exited"));
+        }
         persistent.pending.clear();
         persistent.proc = null;
         persistent.loadedCell = null;
@@ -417,6 +431,7 @@ function createNautilusBridge({ port = 18768 } = {}) {
 
   function stopPersistent() {
     if (persistent.proc) {
+      persistent.stopping = true;
       try {
         persistent.proc.stdin.write(`${JSON.stringify({ cmd: "quit", requestId: persistent.nextId++ })}\n`);
       } catch {
@@ -427,7 +442,7 @@ function createNautilusBridge({ port = 18768 } = {}) {
       } catch {
         /* ignore */
       }
-      persistent.proc = null;
+      // exit handler temizler; burada null’a çekmeyelim ki exit intentional kalsın
       persistent.loadedCell = null;
       persistent.lastViewport = null;
     }

@@ -29,6 +29,37 @@ function withDegree(raw: string): string {
 function SvgCompass({ heading }: { heading: number }) {
   const hostRef = useRef<HTMLElement | null>(null);
   const [geom, setGeom] = useState({ width: 320, height: 42 });
+  const targetRef = useRef(heading);
+  const displayRef = useRef(heading);
+  const [displayHdg, setDisplayHdg] = useState(heading);
+  const rafRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    targetRef.current = ((heading % 360) + 360) % 360;
+  }, [heading]);
+
+  useEffect(() => {
+    let alive = true;
+    const tick = () => {
+      if (!alive) return;
+      const cur = displayRef.current;
+      const tgt = targetRef.current;
+      let d = ((tgt - cur + 540) % 360) - 180;
+      // Exponential ease + max ~150°/s — ani atlama yok, profesyonel kayma
+      const ease = d * 0.14;
+      const cap = 150 / 60;
+      const step = Math.abs(ease) < 0.04 ? d : Math.sign(ease) * Math.min(Math.abs(ease), cap);
+      const next = Math.abs(d) < 0.08 ? tgt : (cur + step + 360) % 360;
+      displayRef.current = next;
+      setDisplayHdg(next);
+      rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+    return () => {
+      alive = false;
+      if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     const el = hostRef.current;
@@ -49,7 +80,7 @@ function SvgCompass({ heading }: { heading: number }) {
   const pixelsPerDegree = width / degreesPerView;
   const ticks: Array<{ x: number; major: boolean; medium: boolean; label?: string }> = [];
   for (let degree = 0; degree < 360; degree += 5) {
-    const diff = deltaAngle(degree, heading);
+    const diff = deltaAngle(degree, displayHdg);
     const x = width / 2 + diff * pixelsPerDegree;
     if (x < 9 || x > width - 9) continue;
     const major = degree % 45 === 0;
@@ -61,6 +92,8 @@ function SvgCompass({ heading }: { heading: number }) {
       label: major && Math.abs(x - width / 2) > 14 ? DIRECTIONS[degree / 45] : undefined,
     });
   }
+
+  const readout = Math.round(((displayHdg % 360) + 360) % 360);
 
   return (
     <section className="compass" aria-label="Pusula / heading" ref={hostRef}>
@@ -87,7 +120,7 @@ function SvgCompass({ heading }: { heading: number }) {
         <span className="shaft" />
         <span className="triangle" />
       </div>
-      <div className="heading-readout">{`${heading}°`}</div>
+      <div className="heading-readout">{`${readout}°`}</div>
     </section>
   );
 }

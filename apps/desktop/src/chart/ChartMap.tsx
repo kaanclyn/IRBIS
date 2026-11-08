@@ -554,6 +554,7 @@ export function ChartMap({
   onMove,
   onCursorMove,
   ownShip,
+  followOwn = false,
   headingDeg,
   aisTargets,
   aisVisible = true,
@@ -570,6 +571,7 @@ export function ChartMap({
   /** Mouse pointer lat/lon over the chart; null when pointer leaves. */
   onCursorMove?: (info: { lat: number; lon: number } | null) => void;
   ownShip?: { lat: number; lon: number; stale?: boolean } | null;
+  followOwn?: boolean;
   headingDeg?: number;
   aisTargets?: Array<{
     mmsi: number;
@@ -699,6 +701,17 @@ export function ChartMap({
       window.removeEventListener("irbis:map-center", onCenter as EventListener);
     };
   }, []);
+
+  const lastFollowEase = useRef(0);
+  useEffect(() => {
+    if (!followOwn || !ownShip) return;
+    const map = mapRef.current;
+    if (!map) return;
+    const now = Date.now();
+    if (now - lastFollowEase.current < 800) return;
+    lastFollowEase.current = now;
+    map.easeTo({ center: [ownShip.lon, ownShip.lat], duration: 500, essential: true });
+  }, [followOwn, ownShip?.lat, ownShip?.lon]);
 
   useEffect(() => {
     let cancelled = false;

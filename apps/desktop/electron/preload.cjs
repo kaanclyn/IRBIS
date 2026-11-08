@@ -23,6 +23,8 @@ contextBridge.exposeInMainWorld("irbis", {
   },
   getOwnShip: () => ipcRenderer.invoke("irbis:get-ownship"),
   getAis: () => ipcRenderer.invoke("irbis:get-ais"),
+  simControl: (cmd) => ipcRenderer.invoke("irbis:sim-control", cmd),
+  simStatus: () => ipcRenderer.invoke("irbis:sim-status"),
   windowMinimize: () => ipcRenderer.invoke("irbis:window-minimize"),
   windowMaximizeToggle: () => ipcRenderer.invoke("irbis:window-maximize-toggle"),
   windowClose: () => ipcRenderer.invoke("irbis:window-close"),

@@ -306,6 +306,7 @@ button {
 }
 
 .navigation-bar .heading-readout {
+  transition: opacity 80ms linear;
   position: absolute;
   z-index: 2;
   bottom: -16px;
@@ -490,6 +491,7 @@ button {
     top: 6px;
   }
   .navigation-bar .heading-readout {
+  transition: opacity 80ms linear;
     bottom: 2px;
     border: 1px solid var(--bar-border);
     border-radius: 7px;
@@ -3708,7 +3710,7 @@ html[data-ui="light"] .side-panel-bridge {
 
 .settings-tabs {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   gap: 4px;
   padding: 8px 10px;
   flex-shrink: 0;
@@ -3736,9 +3738,9 @@ html[data-ui="light"] .side-panel-bridge {
 }
 
 .settings-tab.active {
-  color: #f8fafc;
-  background: linear-gradient(180deg, rgba(56, 189, 248, 0.28) 0%, rgba(37, 99, 235, 0.18) 100%);
-  box-shadow: inset 0 -2px 0 #38bdf8;
+  color: #0a0a0a;
+  background: #22c55e;
+  box-shadow: none;
 }
 
 .settings-body.settings-body,
@@ -4932,4 +4934,394 @@ html[data-ui="light"] .side-panel-bridge {
     width: min(240px, 42vw);
     height: min(150px, 22vh);
   }
+}
+
+/* —— Seyir simülasyon paneli —— */
+.sim-cruise-bar {
+  position: absolute;
+  top: 52px;
+  left: 14px;
+  z-index: 40;
+  /* dock disinda kullanilirsa; dock'ta .dock-sim-panel override eder */
+  width: min(260px, calc(100% - 28px));
+  padding: 10px 12px 12px;
+  border-radius: 10px;
+  background: rgba(8, 14, 22, 0.82);
+  border: 1px solid rgba(120, 170, 210, 0.35);
+  color: #d7e6f4;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  font-size: 12px;
+  pointer-events: auto;
+}
+.sim-cruise-bar.is-running {
+  border-color: rgba(64, 200, 255, 0.65);
+}
+.sim-cruise-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.sim-cruise-title strong {
+  letter-spacing: 0.08em;
+  font-size: 11px;
+  color: #9fd6ff;
+}
+.sim-cruise-title span {
+  opacity: 0.75;
+  font-variant-numeric: tabular-nums;
+}
+.sim-cruise-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.sim-cruise-btn {
+  border: 0;
+  border-radius: 7px;
+  padding: 6px 12px;
+  font-weight: 650;
+  cursor: pointer;
+  color: #061018;
+}
+.sim-cruise-btn.start {
+  background: #4ec4ff;
+}
+.sim-cruise-btn.stop {
+  background: #ff7b6b;
+  color: #1a0908;
+}
+.sim-cruise-btn:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+.sim-cruise-follow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+.sim-cruise-speed {
+  display: grid;
+  gap: 4px;
+}
+.sim-cruise-speed input[type="range"] {
+  width: 100%;
+  accent-color: #4ec4ff;
+}
+.sim-cruise-hint {
+  margin: 8px 0 0;
+  opacity: 0.65;
+  font-size: 11px;
+  line-height: 1.35;
+}
+.nautilus-route {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.sim-cruise-speed-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.sim-cruise-speed-row .sim-cruise-speed {
+  flex: 1;
+  min-width: 0;
+}
+.sim-cruise-nudge {
+  width: 28px;
+  height: 28px;
+  border: 1px solid rgba(120, 170, 210, 0.45);
+  border-radius: 7px;
+  background: rgba(20, 32, 48, 0.9);
+  color: #d7e6f4;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.sim-cruise-nudge:hover {
+  background: rgba(40, 70, 100, 0.95);
+}
+
+/* Dock simülatör */
+.dock-sim {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.dock-sim-btn.active {
+  color: #4ec4ff;
+}
+.dock-sim-panel {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 14px);
+  transform: translateX(-50%);
+  z-index: 80;
+  width: min(320px, 78vw);
+  pointer-events: auto;
+}
+.dock-sim-panel .sim-cruise-bar {
+  position: relative;
+  top: auto;
+  left: auto;
+  width: 100%;
+  margin: 0;
+}
+.sim-cruise-bar.is-compact {
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+}
+.sim-cruise-btn.restart {
+  background: rgba(90, 120, 150, 0.85);
+  color: #e8f2fa;
+  font-weight: 650;
+  padding: 6px 10px;
+}
+.sim-cruise-btn.stop {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 750;
+  min-width: 96px;
+  justify-content: center;
+  box-shadow: 0 0 0 1px rgba(255, 120, 100, 0.45), 0 4px 14px rgba(180, 40, 30, 0.35);
+}
+.sim-cruise-stop-icon {
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+  background: currentColor;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.25);
+  flex: 0 0 auto;
+}
+.sim-cruise-actions {
+  flex-wrap: wrap;
+}
+
+/* —— dmlink.ai sim panel (siyah / yeşil, flat) —— */
+:root {
+  --dm-bg: #0a0a0a;
+  --dm-panel: #111111;
+  --dm-card: #161616;
+  --dm-border: #262626;
+  --dm-text: #f5f5f5;
+  --dm-muted: #9ca3af;
+  --dm-green: #22c55e;
+  --dm-green-dim: #16a34a;
+  --dm-danger: #ef4444;
+}
+
+.sim-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px;
+  border-radius: 12px;
+  background: var(--dm-card);
+  border: 1px solid var(--dm-border);
+  color: var(--dm-text);
+}
+
+.sim-panel-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.sim-panel-kicker {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--dm-green);
+  margin-bottom: 2px;
+}
+
+.sim-panel-title {
+  font-size: 15px;
+  font-weight: 750;
+  letter-spacing: -0.02em;
+  color: var(--dm-text);
+}
+
+.sim-panel-desc {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--dm-muted);
+}
+
+.sim-badge {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--dm-border);
+  background: #0f0f0f;
+  color: var(--dm-muted);
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.sim-badge.live {
+  border-color: rgba(34, 197, 94, 0.45);
+  background: rgba(34, 197, 94, 0.12);
+  color: var(--dm-green);
+}
+
+.sim-row-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.sim-btn {
+  height: 38px;
+  border-radius: 9px;
+  border: 1px solid var(--dm-border);
+  background: #1a1a1a;
+  color: var(--dm-text);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.sim-btn:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+
+.sim-btn.primary {
+  background: var(--dm-green);
+  border-color: var(--dm-green);
+  color: #0a0a0a;
+}
+
+.sim-btn.primary:hover {
+  background: var(--dm-green-dim);
+  border-color: var(--dm-green-dim);
+}
+
+.sim-btn.danger {
+  background: var(--dm-danger);
+  border-color: var(--dm-danger);
+  color: #fff;
+}
+
+.sim-btn.ghost:hover {
+  border-color: #404040;
+  background: #1f1f1f;
+}
+
+.sim-stop-sq {
+  width: 11px;
+  height: 11px;
+  border-radius: 2px;
+  background: currentColor;
+}
+
+.sim-field {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #0f0f0f;
+  border: 1px solid var(--dm-border);
+}
+
+.sim-field-label {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 12px;
+  color: var(--dm-muted);
+}
+
+.sim-field-label strong {
+  color: var(--dm-green);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sim-speed {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sim-speed input[type="range"] {
+  flex: 1;
+  accent-color: var(--dm-green);
+}
+
+.sim-nudge {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  border: 1px solid var(--dm-border);
+  background: #1a1a1a;
+  color: var(--dm-text);
+  font-size: 16px;
+  cursor: pointer;
+}
+
+.sim-nudge:hover {
+  border-color: var(--dm-green);
+  color: var(--dm-green);
+}
+
+.sim-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--dm-border);
+  background: #0f0f0f;
+  cursor: pointer;
+  user-select: none;
+}
+
+.sim-check input {
+  margin-top: 3px;
+  accent-color: var(--dm-green);
+}
+
+.sim-check span {
+  display: grid;
+  gap: 2px;
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--dm-text);
+}
+
+.sim-check em {
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--dm-muted);
+}
+
+/* Eski floating sim bar gizle (artık ayarlarda) */
+.sim-cruise-bar {
+  display: none !important;
+}
+.dock-sim,
+.dock-sim-panel {
+  display: none !important;
 }

@@ -458,6 +458,13 @@ ipcMain.handle("irbis:get-ownship", () => nmea?.getState() ?? null);
 
 ipcMain.handle("irbis:get-ais", () => nmea?.getAis() ?? { targets: [], count: 0 });
 
+ipcMain.handle("irbis:sim-control", (_e, cmd) => {
+  if (!nmea?.controlSim) return { ok: false, error: "sim yok" };
+  return { ok: true, ...nmea.controlSim(cmd || {}) };
+});
+
+ipcMain.handle("irbis:sim-status", () => nmea?.cruiseStatus?.() ?? { running: false });
+
 ipcMain.handle("irbis:camera-list", () => cameras?.snapshot() ?? { activeId: null, activeStream: "visible", cameras: [], count: 0 });
 
 ipcMain.handle("irbis:camera-discover", async (_e, opts) => {

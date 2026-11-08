@@ -261,6 +261,30 @@ interface IrbisApi {
   onMapEngineChanged: (handler: (payload: unknown) => void) => () => void;
   getOwnShip: () => Promise<unknown>;
   getAis: () => Promise<unknown>;
+  simControl: (cmd: {
+    action: "start" | "stop" | "setSpeed" | "status" | "resume" | "restart";
+    speedKn?: number;
+    reset?: boolean;
+  }) => Promise<{
+    ok?: boolean;
+    running?: boolean;
+    speedKn?: number;
+    segIndex?: number;
+    waypointCount?: number;
+    lat?: number;
+    lon?: number;
+    route?: Array<{ lat: number; lon: number; name?: string | null }>;
+    error?: string;
+  }>;
+  simStatus: () => Promise<{
+    running?: boolean;
+    speedKn?: number;
+    segIndex?: number;
+    waypointCount?: number;
+    lat?: number;
+    lon?: number;
+    route?: Array<{ lat: number; lon: number; name?: string | null }>;
+  }>;
   windowMinimize: () => Promise<void>;
   windowMaximizeToggle: () => Promise<{ maximized: boolean }>;
   windowClose: () => Promise<void>;

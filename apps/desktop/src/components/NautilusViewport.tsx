@@ -83,6 +83,8 @@ export function NautilusViewport({
   aisTargets,
   aisVisible = true,
   radarVisible = false,
+  followOwn = false,
+  cruiseRoute,
   onCursorMove,
   onFeatureQuery,
 }: {
@@ -93,6 +95,8 @@ export function NautilusViewport({
   aisTargets?: AisTarget[];
   aisVisible?: boolean;
   radarVisible?: boolean;
+  followOwn?: boolean;
+  cruiseRoute?: Array<{ lat: number; lon: number; name?: string | null }>;
   onCursorMove?: (p: { lat: number; lon: number }) => void;
   onFeatureQuery?: (hit: {
     title: string;
@@ -111,6 +115,9 @@ export function NautilusViewport({
   /** Her pan/zoom jesti — render ortasında cam değişirse commit iptal */
   const gestureGen = useRef(0);
   const settleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const followInFlight = useRef(false);
+  const followTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastFollowAt = useRef(0);
 
   const [busy, setBusy] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -185,11 +192,13 @@ export function NautilusViewport({
   }, []);
 
   const redraw = useCallback(
-    async (opts: { action: "fit" | "set"; bbox?: GeoBBox | null }) => {
+    async (opts: { action: "fit" | "set"; bbox?: GeoBBox | null; reason?: "user" | "follow" | "center" }) => {
       if (!window.irbis?.nautilusSetViewport) throw new Error("Nautilus API yok");
       const seq = ++loadSeq.current;
       const genAtStart = gestureGen.current;
       const camAtStart = { ...camRef.current };
+      const followLike = opts.reason === "follow" || opts.reason === "center";
+      if (followLike) followInFlight.current = true;
       setBusy(true);
       setErr(null);
       sizeRef.current = stagePixelSize(stageRef.current);
@@ -213,16 +222,16 @@ export function NautilusViewport({
               };
         const r = (await window.irbis.nautilusSetViewport(payload)) as RenderInfo;
         if (seq !== loadSeq.current) return;
-        // Render sırasında kullanıcı zoom’a devam ettiyse bu frame’i basma — yeniden settle
-        if (genAtStart !== gestureGen.current) {
+        // Kullanici jesti: iptal + yeniden settle. Follow/center: cam drift yutma.
+        if (!followLike && genAtStart !== gestureGen.current) {
           scheduleRedrawRef.current?.();
           return;
         }
         await commitFrame(r, true);
-        // Commit sonrası cam hâlâ jestten kalmışsa (nadir) temizle
         if (
-          Math.abs(camRef.current.x - camAtStart.x) > 2 ||
-          Math.abs(camRef.current.scale / Math.max(1e-6, camAtStart.scale) - 1) > 0.04
+          !followLike &&
+          (Math.abs(camRef.current.x - camAtStart.x) > 2 ||
+            Math.abs(camRef.current.scale / Math.max(1e-6, camAtStart.scale) - 1) > 0.04)
         ) {
           scheduleRedrawRef.current?.();
         }
@@ -230,10 +239,10 @@ export function NautilusViewport({
         if (seq !== loadSeq.current) return;
         setErr(String((e as { message?: string })?.message || e));
       } finally {
+        if (followLike) followInFlight.current = false;
         if (seq === loadSeq.current) setBusy(false);
       }
-    },
-    [cellId, commitFrame]
+    },[cellId, commitFrame]
   );
 
   const scheduleRedrawRef = useRef<(() => void) | null>(null);
@@ -261,6 +270,73 @@ export function NautilusViewport({
       if (settleTimer.current) clearTimeout(settleTimer.current);
     };
   }, [cellId, reloadToken, redraw]);
+
+  useEffect(() => {
+    if (!followOwn || !ownShip || !Number.isFinite(ownShip.lat) || !Number.isFinite(ownShip.lon)) return;
+    if (followInFlight.current || busy) return;
+    const vp = baseVpRef.current;
+    if (!vp) return;
+
+    const lonSpan = vp.east - vp.west;
+    const latSpan = vp.north - vp.south;
+    if (!(lonSpan > 0) || !(latSpan > 0)) return;
+
+    // Gemi PNG icinde yuzer (CSS pan YOK = titreme yok). Kenara gelince tek temiz redraw.
+    const fx = (ownShip.lon - vp.west) / lonSpan;
+    const fy = (vp.north - ownShip.lat) / latSpan;
+    const margin = 0.32;
+    const nearEdge = fx < margin || fx > 1 - margin || fy < margin || fy > 1 - margin;
+    if (!nearEdge) return;
+
+    const now = Date.now();
+    if (now - lastFollowAt.current < 1100) return;
+    if (followTimer.current) clearTimeout(followTimer.current);
+    followTimer.current = setTimeout(() => {
+      if (followInFlight.current) return;
+      lastFollowAt.current = Date.now();
+      // Mevcut ekran zoom'unu koru (CSS scale dahil)
+      const scale = Math.max(0.25, camRef.current.scale);
+      const visLon = lonSpan / scale;
+      const visLat = latSpan / scale;
+      const bbox = {
+        west: ownShip.lon - visLon / 2,
+        east: ownShip.lon + visLon / 2,
+        north: ownShip.lat + visLat / 2,
+        south: ownShip.lat - visLat / 2,
+      };
+      // Takip redraw: cam 0'a reset, gemi ortada, siyah bosluk yok
+      setCamBoth({ x: 0, y: 0, scale: 1 });
+      void redraw({ action: "set", bbox, reason: "follow" });
+    }, 80);
+
+    return () => {
+      if (followTimer.current) clearTimeout(followTimer.current);
+    };
+  }, [followOwn, ownShip?.lat, ownShip?.lon, redraw, busy]);
+
+  useEffect(() => {
+    const onCenter = (ev: Event) => {
+      const d = (ev as CustomEvent<{ lat?: number; lon?: number }>).detail;
+      if (d?.lat == null || d?.lon == null || !Number.isFinite(d.lat) || !Number.isFinite(d.lon)) return;
+      const vp = baseVpRef.current;
+      if (!vp) return;
+      const scale = Math.max(0.25, camRef.current.scale);
+      const lonSpan = (vp.east - vp.west) / scale;
+      const latSpan = (vp.north - vp.south) / scale;
+      void redraw({
+        action: "set",
+        reason: "center",
+        bbox: {
+          west: d.lon - lonSpan / 2,
+          east: d.lon + lonSpan / 2,
+          north: d.lat + latSpan / 2,
+          south: d.lat - latSpan / 2,
+        },
+      });
+    };
+    window.addEventListener("irbis:map-center", onCenter as EventListener);
+    return () => window.removeEventListener("irbis:map-center", onCenter as EventListener);
+  }, [redraw]);
 
   const screenToPngPx = useCallback((clientX: number, clientY: number) => {
     const stage = stageRef.current;
@@ -408,6 +484,14 @@ export function NautilusViewport({
     return out;
   }, [aisTargets, aisVisible, headingDeg, info?.viewport, ownShip, radarVisible]);
 
+  const routePts = useMemo(() => {
+    const vp = info?.viewport;
+    if (!vp || !cruiseRoute?.length) return [] as Array<{ x: number; y: number; name?: string | null }>;
+    return cruiseRoute
+      .filter((w) => Number.isFinite(w.lat) && Number.isFinite(w.lon))
+      .map((w) => ({ ...geoToPct(vp, w.lon, w.lat), name: w.name }));
+  }, [cruiseRoute, info?.viewport]);
+
   const chromeRight = info
     ? `${info.cellId} · ${info.renderMode || "draw"} · ${info.drawMs ?? info.ms ?? "—"}ms · ×${cam.scale.toFixed(2)}`
     : busy
@@ -444,6 +528,21 @@ export function NautilusViewport({
             >
               <img className="nautilus-viewport-img" src={info.url} alt={info.cellId} draggable={false} />
               <div className="nautilus-overlay">
+                {routePts.length > 1 ? (
+                  <svg className="nautilus-route" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden>
+                    <polyline
+                      fill="none"
+                      stroke="rgba(64, 200, 255, 0.85)"
+                      strokeWidth="0.45"
+                      strokeLinejoin="round"
+                      strokeLinecap="round"
+                      points={routePts.map((p) => `${p.x},${p.y}`).join(" ")}
+                    />
+                    {routePts.map((p, i) => (
+                      <circle key={`wp-${i}`} cx={p.x} cy={p.y} r="0.7" fill="rgba(64,200,255,0.95)" />
+                    ))}
+                  </svg>
+                ) : null}
                 {markers.map((m) =>
                   m.kind === "radar" ? (
                     <div key={m.key} className="nautilus-radar-ring" style={{ left: `${m.x}%`, top: `${m.y}%` }} />

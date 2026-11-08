@@ -89,7 +89,7 @@ export function App() {
   const [featureHit, setFeatureHit] = useState<ChartFeatureHit | null>(null);
   const [mob, setMob] = useState<MobPoint | null>(null);
   const [statusNote, setStatusNote] = useState<string | null>(null);
-  const [viewMode, setViewMode] = useState<ViewMode>("map-cam-pip");
+  const [viewMode, setViewMode] = useState<ViewMode>("map");
   const [camZoom, setCamZoom] = useState(1);
 
   const [aisOn, setAisOn] = useState(true);
@@ -104,6 +104,11 @@ export function App() {
   const [camCursor, setCamCursor] = useState(false);
   const [camAisLock, setCamAisLock] = useState(false);
   const [camLayout, setCamLayout] = useState<CamLayoutState>(() => loadCamLayout());
+  const [followOwn, setFollowOwn] = useState(false);
+  const [simRunning, setSimRunning] = useState(false);
+  const [cruiseRoute, setCruiseRoute] = useState<
+    Array<{ lat: number; lon: number; name?: string | null }>
+  >([]);
 
   const own = useOwnShip();
   const ais = useAis();
@@ -146,6 +151,12 @@ export function App() {
     const id = window.setTimeout(() => setStatusNote(null), 2200);
     return () => window.clearTimeout(id);
   }, [statusNote]);
+
+  useEffect(() => {
+    void window.irbis?.simStatus?.().then((s) => {
+      if (s?.route?.length) setCruiseRoute(s.route);
+    });
+  }, []);
 
   useEffect(() => {
     void window.irbis?.windowIsMaximized?.().then((s) => setMaximized(!!s?.maximized));
@@ -412,6 +423,8 @@ export function App() {
                 aisTargets={ais.targets}
                 aisVisible={aisOn}
                 radarVisible={radarOn}
+                followOwn={followOwn}
+                cruiseRoute={simRunning ? cruiseRoute : []}
                 onCursorMove={onCursorMove}
                 onFeatureQuery={(hit) => {
                   if (!hit) {
@@ -434,6 +447,7 @@ export function App() {
                 onMove={onMove}
                 onCursorMove={onCursorMove}
                 ownShip={own.position}
+                followOwn={followOwn}
                 headingDeg={own.state?.headingDegTrue?.value}
                 aisTargets={ais.targets}
                 aisVisible={aisOn}
@@ -643,6 +657,11 @@ export function App() {
             onClose={() => setPanelOpen(false)}
             onNote={setStatusNote}
             onMapEngineChange={() => setChartReload((n) => n + 1)}
+            followOwn={followOwn}
+            onFollowChange={setFollowOwn}
+            onRoute={setCruiseRoute}
+            onSimRunningChange={setSimRunning}
+            initialTab="seyir"
           />
         ) : null}
       </div>
@@ -657,6 +676,7 @@ function SettingsGlyph() {
     </svg>
   );
 }
+
 
 function ViewModeIcon({ mode }: { mode: ViewMode }) {
   const stroke = "currentColor";
