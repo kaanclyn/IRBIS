@@ -255,6 +255,24 @@ interface IrbisApi {
     note?: string;
   }>;
   nautilusRescan: () => Promise<Array<{ id: string; name: string; path: string; source: string }>>;
+  nautilusS63Status: () => Promise<{
+    ready?: boolean;
+    imported?: boolean;
+    lastError?: string | null;
+    cellCount?: number;
+    trCells?: number;
+    userPermits?: Array<{ label: string; hwId: string; userPermit: string; source: string }>;
+    paths?: Record<string, unknown>;
+    error?: string;
+  }>;
+  nautilusS63Setup: (payload?: {
+    userPermit?: string;
+    mKey?: string;
+    exchange?: string;
+    permitTxt?: string;
+    certificate?: string;
+    library?: string;
+  }) => Promise<{ ok?: boolean; error?: string; ready?: boolean; cellCount?: number }>;
   pickEncFolder: () => Promise<{ canceled: boolean; library: ChartLibrarySnapshot }>;
   setActiveCell: (name: string) => Promise<{ ok: boolean; error?: string; library: ChartLibrarySnapshot }>;
   rescanCharts: () => Promise<ChartLibrarySnapshot>;

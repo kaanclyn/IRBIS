@@ -5,6 +5,7 @@ const crypto = require("node:crypto");
 const { spawn } = require("node:child_process");
 const { app } = require("electron");
 const { log } = require("./log.cjs");
+const s63 = require("./nautilusS63.cjs");
 
 function defaultSdkRoot() {
   const fromEnv = process.env.IRBIS_NAUTILUS_SDK?.trim();
@@ -389,15 +390,29 @@ function createNautilusBridge({ port = 18768 } = {}) {
     );
   }
 
-  async function runPersistentRender(cellPath, outPng, width, height, dpi, bbox) {
+  async function runPersistentRender(cellPath, outPng, width, height, dpi, bbox, cellMeta = null) {
     await ensurePersistent();
     if (persistent.loadedCell !== cellPath) {
-      const loaded = await persistentRequest("loadCell", {
-        path: jsonPath(cellPath),
-        width,
-        height,
-        dpi,
-      });
+      const isS63 = !!(cellMeta && (cellMeta.kind === "s63" || cellMeta.s63 || cellMeta.source === "vendor-s63"));
+      let loaded;
+      if (isS63) {
+        if (!s63Ready) {
+          throw new Error("S-63 kütüphane hazır değil — Ayarlar → Seyir → S-63 Import");
+        }
+        loaded = await persistentRequest("loadLibraryCell", {
+          name: String(cellMeta.id || cellPath),
+          width,
+          height,
+          dpi,
+        });
+      } else {
+        loaded = await persistentRequest("loadCell", {
+          path: jsonPath(cellPath),
+          width,
+          height,
+          dpi,
+        });
+      }
       persistent.loadedCell = cellPath;
       if (loaded.viewport) persistent.lastViewport = clampBBox(loaded.viewport);
     }
@@ -448,6 +463,9 @@ function createNautilusBridge({ port = 18768 } = {}) {
     }
   }
 
+  let s63Ready = false;
+  let s63State = { imported: false, lastError: null };
+
   function rescan() {
     cells = new Map();
     const roots = [
@@ -460,8 +478,10 @@ function createNautilusBridge({ port = 18768 } = {}) {
       const name = path.basename(filePath, path.extname(filePath));
       const id = name.toUpperCase();
       if (cells.has(id)) continue;
-      cells.set(id, { id, name, path: filePath, source: "sdk-testdata" });
+      cells.set(id, { id, name, path: filePath, source: "sdk-testdata", kind: "s57" });
     }
+    // Vendor TR (Hafta17) stubs kapalı — decrypt/OEM M_KEY yok; listede sadece SDK testdata.
+    // Import sonrası library hücreleri setupS63 içinde eklenir (TR* filtrelenir).
     log.info(`nautilus cells scanned: ${cells.size} · sdk=${sdkRoot} · mode=${renderMode}`);
     return list();
   }
@@ -742,7 +762,7 @@ function createNautilusBridge({ port = 18768 } = {}) {
       if (renderMode === "persistent" && persistentExe) {
         try {
           const directPng = path.join(tmpDir, `${cell.id}-frame.png`);
-          const result = await runPersistentRender(cell.path, directPng, width, height, dpi, bbox);
+          const result = await runPersistentRender(cell.path, directPng, width, height, dpi, bbox, cell);
           stdout = result.stdout || "";
           renderMs = result.ms;
           // Karo: istenen bbox anahtar — Kernel’in hafif sapması mozaik kırar
@@ -1049,12 +1069,23 @@ function createNautilusBridge({ port = 18768 } = {}) {
       try {
         await ensurePersistent();
         if (persistent.loadedCell !== cell.path) {
-          await persistentRequest("loadCell", {
-            path: jsonPath(cell.path),
-            width,
-            height,
-            dpi: 96,
-          });
+          const isS63 = !!(cell.kind === "s63" || cell.s63 || cell.source === "vendor-s63" || cell.source === "s63-library");
+          if (isS63) {
+            if (!s63Ready) throw new Error("S-63 hazır değil");
+            await persistentRequest("loadLibraryCell", {
+              name: String(cell.id || cell.path),
+              width,
+              height,
+              dpi: 96,
+            });
+          } else {
+            await persistentRequest("loadCell", {
+              path: jsonPath(cell.path),
+              width,
+              height,
+              dpi: 96,
+            });
+          }
           persistent.loadedCell = cell.path;
         }
         await persistentRequest("setViewport", {
@@ -1241,6 +1272,93 @@ function createNautilusBridge({ port = 18768 } = {}) {
     });
   }
 
+  async function setupS63(opts = {}) {
+    const paths = s63.resolveS63Paths(opts || {});
+    if (!paths.hasCredentials) {
+      throw new Error("User Permit + M_KEY gerekli (IRBIS_S63_MKEY / Ayarlar)");
+    }
+    if (!paths.hasCertificate) {
+      throw new Error(`IHO.CRT yok: ${paths.certificate}`);
+    }
+    if (!paths.hasPermitTxt) {
+      throw new Error(`PERMIT.TXT yok: ${paths.permitTxt}`);
+    }
+    if (!paths.hasExchange) {
+      throw new Error(`SERIAL.ENC yok: ${paths.exchange}`);
+    }
+
+    s63.saveS63Settings({
+      exchange: paths.exchange,
+      permitTxt: paths.permitTxt,
+      certificate: paths.certificate,
+      library: paths.library,
+      userPermit: paths.userPermit,
+      // store mKey only if explicitly provided via opts (lab); env preferred
+      ...(opts.mKey ? { mKey: String(opts.mKey) } : {}),
+    });
+
+    await ensurePersistent();
+    await persistentRequest("configureS63", {
+      userPermit: paths.userPermit,
+      mKey: paths.mKey,
+      certificate: jsonPath(paths.certificate),
+    });
+    await persistentRequest("openLibrary", { path: jsonPath(paths.library) });
+    await persistentRequest("importPermits", { path: jsonPath(paths.permitTxt) });
+    await persistentRequest("importExchange", { path: jsonPath(paths.exchange) });
+
+    let libCells = [];
+    try {
+      const listed = await persistentRequest("listLibrary", {});
+      libCells = Array.isArray(listed.cells) ? listed.cells : [];
+      for (const c of libCells) {
+        const id = String(c.name || "").toUpperCase();
+        // TR* vendor ENC şimdilik listede yok (OEM M_KEY / cell_not_found)
+        if (!id || /^TR/i.test(id)) continue;
+        cells.set(id, {
+          id,
+          name: id,
+          path: id,
+          source: "s63-library",
+          kind: "s63",
+          s63: true,
+          canLoad: !!c.canLoad,
+        });
+      }
+    } catch (err) {
+      log.warn(`listLibrary: ${err?.message || err}`);
+    }
+
+    s63Ready = true;
+    s63State = { imported: true, lastError: null, cellCount: libCells.length, paths };
+    log.info(`nautilus S-63 ready · library cells=${libCells.length}`);
+    return getS63Status();
+  }
+
+  function getS63Status() {
+    const paths = s63.resolveS63Paths();
+    return {
+      ready: s63Ready,
+      imported: !!s63State.imported,
+      lastError: s63State.lastError || null,
+      cellCount: s63State.cellCount || 0,
+      userPermits: s63.scanUserPermits().slice(0, 80),
+      trCells: s63.scanTrCellIds().length,
+      paths: {
+        exchange: paths.exchange,
+        permitTxt: paths.permitTxt,
+        certificate: paths.certificate,
+        library: paths.library,
+        hasExchange: paths.hasExchange,
+        hasPermitTxt: paths.hasPermitTxt,
+        hasCertificate: paths.hasCertificate,
+        hasCredentials: paths.hasCredentials,
+        userPermit: paths.userPermit ? `${String(paths.userPermit).slice(0, 8)}…` : "",
+        mKeySet: !!paths.mKey,
+      },
+    };
+  }
+
   function status() {
     return {
       sdkRoot,
@@ -1255,6 +1373,7 @@ function createNautilusBridge({ port = 18768 } = {}) {
       frameRoot,
       cacheRoot,
       cache: cacheStats(),
+      s63: getS63Status(),
       d2: {
         viewportIpc: true,
         panZoom: true,
@@ -1328,6 +1447,8 @@ function createNautilusBridge({ port = 18768 } = {}) {
   return {
     rescan,
     list,
+    setupS63,
+    getS63Status,
     ensureRender,
     setViewport,
     ensureTile,

@@ -3,9 +3,8 @@ import type { useCameras } from "../hooks/useCameras";
 import type { CamLayout, CamLayoutState, CamSlot } from "../camera/cameraLayout";
 import { CAM_DRAG_MIME } from "../camera/cameraLayout";
 import { CamDragChip } from "./CameraWall";
-import { SimCruiseBar } from "./SimCruiseBar";
 
-export type SettingsTab = "seyir" | "sim" | "kamera" | "radar" | "genel";
+export type SettingsTab = "seyir" | "kamera" | "radar" | "genel";
 type MapEngine = "navionics" | "nautilus";
 
 type DiscoverHit = {
@@ -16,7 +15,6 @@ type DiscoverHit = {
 
 const TABS: { id: SettingsTab; label: string }[] = [
   { id: "seyir", label: "Seyir" },
-  { id: "sim", label: "Sim" },
   { id: "kamera", label: "Kamera" },
   { id: "radar", label: "Radar" },
   { id: "genel", label: "Genel" },
@@ -31,11 +29,6 @@ export function SettingsPanel({
   onClose,
   onNote,
   onMapEngineChange,
-  followOwn,
-  onFollowChange,
-  onRoute,
-  onSimRunningChange,
-  initialTab = "seyir",
 }: {
   cams: Cams;
   camLayout: CamLayoutState;
@@ -43,13 +36,8 @@ export function SettingsPanel({
   onClose: () => void;
   onNote: (msg: string) => void;
   onMapEngineChange?: () => void;
-  followOwn?: boolean;
-  onFollowChange?: (v: boolean) => void;
-  onRoute?: (route: Array<{ lat: number; lon: number; name?: string | null }>) => void;
-  onSimRunningChange?: (running: boolean) => void;
-  initialTab?: SettingsTab;
 }) {
-  const [tab, setTab] = useState<SettingsTab>(initialTab);
+  const [tab, setTab] = useState<SettingsTab>("seyir");
   const [host, setHost] = useState("");
   const [port, setPort] = useState("80");
   const [user, setUser] = useState("admin");
@@ -77,7 +65,7 @@ export function SettingsPanel({
     void window.irbis
       ?.setMapEngine?.(engine)
       .then(() => {
-        onNote(engine === "nautilus" ? "Harita · Nautilus ENC" : "Harita · Navionics");
+        onNote(engine === "nautilus" ? "Harita ┬À Nautilus ENC" : "Harita ┬À Navionics");
         refreshCatalog();
         onMapEngineChange?.();
       })
@@ -91,7 +79,7 @@ export function SettingsPanel({
       ?.setNautilusCell?.(cellId)
       .then(() => window.irbis?.setMapEngine?.("nautilus"))
       .then(() => {
-        onNote(`Nautilus hücre · ${cellId}`);
+        onNote(`Nautilus h├╝cre ┬À ${cellId}`);
         refreshCatalog();
         onMapEngineChange?.();
       })
@@ -123,7 +111,7 @@ export function SettingsPanel({
             name: d.name || d.hostname,
           }));
         setDiscovered(hits);
-        onNote(hits.length ? `ONVIF keşif · ${hits.length} cihaz` : "ONVIF keşif · cihaz yok");
+        onNote(hits.length ? `ONVIF ke┼ƒif ┬À ${hits.length} cihaz` : "ONVIF ke┼ƒif ┬À cihaz yok");
       })
       .catch((e: { message?: string }) => {
         setDiscovered([]);
@@ -148,8 +136,8 @@ export function SettingsPanel({
             <div className="bridge-title">Ayarlar</div>
           </div>
         </div>
-        <button type="button" className="bridge-x" aria-label="Ayarları kapat" onClick={onClose}>
-          ×
+        <button type="button" className="bridge-x" aria-label="Ayarlar─▒ kapat" onClick={onClose}>
+          ├ù
         </button>
       </div>
 
@@ -172,13 +160,13 @@ export function SettingsPanel({
           <div className="settings-pane settings-cam">
             <section className="settings-card settings-card-tight">
               <div className="settings-card-head">
-                <span>Harita kaynağı</span>
-                <em>{mapBusy ? "…" : mapCatalog?.engine ?? "—"}</em>
+                <span>Harita kayna─ƒ─▒</span>
+                <em>{mapBusy ? "ÔÇª" : mapCatalog?.engine ?? "ÔÇö"}</em>
               </div>
               <div className="map-engine-picks">
                 {(mapCatalog?.sources ?? [
-                  { id: "navionics", label: "Navionics", available: false, detail: "yükleniyor" },
-                  { id: "nautilus", label: "Nautilus ENC", available: false, detail: "yükleniyor" },
+                  { id: "navionics", label: "Navionics", available: false, detail: "y├╝kleniyor" },
+                  { id: "nautilus", label: "Nautilus ENC", available: false, detail: "y├╝kleniyor" },
                 ]).map((src) => (
                   <button
                     key={src.id}
@@ -194,7 +182,7 @@ export function SettingsPanel({
                 ))}
               </div>
               <p className="settings-muted tight">
-                Navionics = offline karo. Nautilus = kalıcı C++ renderer (SetViewPort + Draw);
+                Navionics = offline karo. Nautilus = kal─▒c─▒ C++ renderer (SetViewPort + Draw);
                 disk tile cache yok.
               </p>
             </section>
@@ -205,7 +193,7 @@ export function SettingsPanel({
                 <em>{mapCatalog?.nautilusCells?.length ?? 0}</em>
               </div>
               {(mapCatalog?.nautilusCells?.length ?? 0) === 0 ? (
-                <p className="settings-muted tight">SDK testdata hücre yok / bridge kapalı.</p>
+                <p className="settings-muted tight">SDK testdata h├╝cre yok / bridge kapal─▒.</p>
               ) : (
                 <ul className="map-cell-list">
                   {mapCatalog!.nautilusCells.map((c) => (
@@ -233,7 +221,7 @@ export function SettingsPanel({
                     ?.nautilusRescan?.()
                     .then(() => {
                       refreshCatalog();
-                      onNote("Nautilus hücreler tarandı");
+                      onNote("Nautilus h├╝creler tarand─▒");
                     })
                     .catch((e: { message?: string }) => onNote(String(e?.message || e)))
                     .finally(() => setMapBusy(false));
@@ -259,7 +247,7 @@ export function SettingsPanel({
           <div className="settings-pane settings-cam">
             <section className="settings-card settings-card-tight">
               <div className="settings-card-head">
-                <span>Ekran düzeni</span>
+                <span>Ekran d├╝zeni</span>
                 <em>max 4</em>
               </div>
               <div className="cam-layout-picks">
@@ -273,19 +261,19 @@ export function SettingsPanel({
                   >
                     <span className={`cam-layout-glyph g${n}`} aria-hidden />
                     <strong>{n}</strong>
-                    <small>{n === 1 ? "tek" : n === 2 ? "2 kanal" : "ızgara"}</small>
+                    <small>{n === 1 ? "tek" : n === 2 ? "2 kanal" : "─▒zgara"}</small>
                   </button>
                 ))}
               </div>
               <p className="settings-muted tight">
-                PiP: 1 kanal · Split: 2 alt alta · Tam kamera: 2 yan yana · 4: ızgara
+                PiP: 1 kanal ┬À Split: 2 alt alta ┬À Tam kamera: 2 yan yana ┬À 4: ─▒zgara
               </p>
             </section>
 
             <section className="settings-card settings-card-tight">
               <div className="settings-card-head">
                 <span>Kanallar</span>
-                <em>sürükle → bırak</em>
+                <em>s├╝r├╝kle ÔåÆ b─▒rak</em>
               </div>
               <div className={`settings-channel-matrix layout-${camLayout.layout}`}>
                 {camLayout.slots.slice(0, camLayout.layout).map((slot, i) => (
@@ -307,7 +295,7 @@ export function SettingsPanel({
                 <em>{cams.count}</em>
               </div>
               {cams.cameras.length === 0 ? (
-                <p className="settings-muted tight">Henüz kamera yok — aşağıdan ekle.</p>
+                <p className="settings-muted tight">Hen├╝z kamera yok ÔÇö a┼ƒa─ƒ─▒dan ekle.</p>
               ) : (
                 <div className="cam-pool">
                   {cams.cameras.map((c) => (
@@ -316,10 +304,10 @@ export function SettingsPanel({
                       <button
                         type="button"
                         className="settings-cam-del sm"
-                        title="Kaldır"
-                        onClick={() => void cams.remove(c.id).then(() => onNote(`Silindi · ${c.name}`))}
+                        title="Kald─▒r"
+                        onClick={() => void cams.remove(c.id).then(() => onNote(`Silindi ┬À ${c.name}`))}
                       >
-                        ×
+                        ├ù
                       </button>
                     </div>
                   ))}
@@ -335,7 +323,7 @@ export function SettingsPanel({
                 onClick={() => setAddOpen((v) => !v)}
               >
                 <span>ONVIF ekle</span>
-                <em>{addOpen ? "−" : "+"}</em>
+                <em>{addOpen ? "ÔêÆ" : "+"}</em>
               </button>
 
               {addOpen ? (
@@ -346,15 +334,15 @@ export function SettingsPanel({
                     disabled={discovering || busy}
                     onClick={runDiscover}
                   >
-                    {discovering ? "Aranıyor…" : "Ağda keşfet"}
+                    {discovering ? "Aran─▒yorÔÇª" : "A─ƒda ke┼ƒfet"}
                   </button>
 
                   {discovering ? (
                     <div className="settings-discover-status" role="status">
                       <span className="settings-spinner" aria-hidden />
                       <div>
-                        <strong>Aranıyor</strong>
-                        <small>ONVIF cihazlar taranıyor…</small>
+                        <strong>Aran─▒yor</strong>
+                        <small>ONVIF cihazlar taran─▒yorÔÇª</small>
                       </div>
                     </div>
                   ) : null}
@@ -366,7 +354,7 @@ export function SettingsPanel({
                         <em>{discovered.length}</em>
                       </div>
                       {discovered.length === 0 ? (
-                        <p className="settings-muted tight">Cihaz yok — IP elle gir.</p>
+                        <p className="settings-muted tight">Cihaz yok ÔÇö IP elle gir.</p>
                       ) : (
                         <ul className="settings-discover-list">
                           {discovered.map((hit) => {
@@ -405,11 +393,11 @@ export function SettingsPanel({
                       />
                     </label>
                     <label className="settings-field">
-                      <span className="settings-field-label">Kullanıcı</span>
+                      <span className="settings-field-label">Kullan─▒c─▒</span>
                       <input value={user} onChange={(e) => setUser(e.target.value)} />
                     </label>
                     <label className="settings-field">
-                      <span className="settings-field-label">Şifre</span>
+                      <span className="settings-field-label">┼×ifre</span>
                       <input type="password" value={pass} onChange={(e) => setPass(e.target.value)} />
                     </label>
                   </div>
@@ -422,7 +410,7 @@ export function SettingsPanel({
                       void cams
                         .add({ host: host.trim(), port: Number(port) || 80, username: user, password: pass })
                         .then((r) => {
-                          onNote(`Eklendi · ${r?.count ?? "?"} kamera`);
+                          onNote(`Eklendi ┬À ${r?.count ?? "?"} kamera`);
                           setPass("");
                           const id = r?.cameras?.find((c) => c.host === host.trim())?.id;
                           if (id) {
@@ -434,7 +422,7 @@ export function SettingsPanel({
                         .finally(() => setBusy(false));
                     }}
                   >
-                    {busy ? "Ekleniyor…" : "Kamerayı kaydet"}
+                    {busy ? "EkleniyorÔÇª" : "Kameray─▒ kaydet"}
                   </button>
                 </div>
               ) : null}
@@ -442,24 +430,10 @@ export function SettingsPanel({
           </div>
         ) : null}
 
-        {tab === "sim" ? (
-          <div className="settings-pane settings-cam">
-            <SimCruiseBar
-              follow={!!followOwn}
-              onFollowChange={(v) => {
-                onFollowChange?.(v);
-                if (v) onNote("Harita takibi açık");
-              }}
-              onRoute={onRoute}
-              onRunningChange={onSimRunningChange}
-            />
-          </div>
-        ) : null}
-
         {tab === "radar" ? (
           <div className="settings-pane settings-pane-empty">
             <p className="settings-empty-title">Radar</p>
-            <p className="settings-empty-hint">Radar kaynağı, ARPA ve katman ayarları burada olacak.</p>
+            <p className="settings-empty-hint">Radar kayna─ƒ─▒, ARPA ve katman ayarlar─▒ burada olacak.</p>
           </div>
         ) : null}
 
@@ -508,11 +482,11 @@ function ChannelDrop({
         <>
           <strong>{name || slot.cameraId}</strong>
           <button type="button" className="settings-channel-x" onClick={onClear} aria-label="Temizle">
-            ×
+            ├ù
           </button>
         </>
       ) : (
-        <span className="settings-channel-hint">Bırak</span>
+        <span className="settings-channel-hint">B─▒rak</span>
       )}
     </div>
   );

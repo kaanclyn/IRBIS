@@ -13,6 +13,8 @@ contextBridge.exposeInMainWorld("irbis", {
   nautilusEnsureTile: (payload) => ipcRenderer.invoke("irbis:nautilus-ensure-tile", payload),
   nautilusPick: (payload) => ipcRenderer.invoke("irbis:nautilus-pick", payload),
   nautilusRescan: () => ipcRenderer.invoke("irbis:nautilus-rescan"),
+  nautilusS63Status: () => ipcRenderer.invoke("irbis:nautilus-s63-status"),
+  nautilusS63Setup: (payload) => ipcRenderer.invoke("irbis:nautilus-s63-setup", payload),
   pickEncFolder: () => ipcRenderer.invoke("irbis:pick-enc-folder"),
   setActiveCell: (name) => ipcRenderer.invoke("irbis:set-active-cell", name),
   rescanCharts: () => ipcRenderer.invoke("irbis:rescan-charts"),

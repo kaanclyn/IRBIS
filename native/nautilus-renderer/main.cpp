@@ -15,6 +15,9 @@
 #include <enpickreportfeature.h>
 #include <enpickreportattribute.h>
 #include <engeopoint.h>
+#include <enchartlibrary.h>
+#include <enchartlibrarycatalog.h>
+#include <enreporter.h>
 
 #include <chrono>
 #include <cmath>
@@ -128,6 +131,31 @@ bool extractInt(const std::string &line, const char *key, int &out)
   return true;
 }
 
+Nautilus::EnString toEnString(const std::string &utf8)
+{
+  return Nautilus::EnString(QString::fromUtf8(utf8.c_str()).toStdWString());
+}
+
+// Resolve S-63 exchange root: directory with SERIAL.ENC, or parent of ENC_ROOT / enc_file.
+std::string resolveExchangeRoot(const std::string &pathUtf8)
+{
+  const QString qpath = QString::fromUtf8(pathUtf8.c_str());
+  QFileInfo fi(qpath);
+  if (fi.isFile() && fi.fileName().compare(QStringLiteral("SERIAL.ENC"), Qt::CaseInsensitive) == 0)
+    return fi.absolutePath().toStdString();
+
+  QDir dir(fi.isDir() ? fi.absoluteFilePath() : fi.absolutePath());
+  if (QFileInfo(dir.filePath(QStringLiteral("SERIAL.ENC"))).exists())
+    return dir.absolutePath().toStdString();
+
+  // Path may be ENC_ROOT or enc_file under the exchange set.
+  QDir parent = dir;
+  if (parent.cdUp() && QFileInfo(parent.filePath(QStringLiteral("SERIAL.ENC"))).exists())
+    return parent.absolutePath().toStdString();
+
+  return pathUtf8;
+}
+
 void writeLine(const std::string &json)
 {
   std::cout << json << std::endl;
@@ -152,6 +180,9 @@ void replyErr(int requestId, const std::string &msg)
 struct Session
 {
   std::unique_ptr<Nautilus::Portrayal::EnChartDisplay> display;
+  std::unique_ptr<Nautilus::DataRepository::EnChartLibrary> library;
+  std::string libraryPath;
+  bool s63Configured = false;
   std::shared_ptr<Nautilus::EnByteArray> cairoBuffer;
   unsigned width = 0;
   unsigned height = 0;
@@ -447,6 +478,156 @@ int main(int argc, char **argv)
           body << "]}";
         }
         body << "]";
+        replyOk(requestId, body.str());
+        continue;
+      }
+      if (cmd == "configureS63")
+      {
+        std::string userPermit, mKey, certificate;
+        if (!extractString(line, "userPermit", userPermit) || !extractString(line, "mKey", mKey))
+        {
+          replyErr(requestId, "missing userPermit or mKey");
+          continue;
+        }
+        if (extractString(line, "certificate", certificate) && !certificate.empty())
+        {
+          Nautilus::EnKernel::Instance()->SetS63RootCertificate(toEnString(certificate));
+        }
+        Nautilus::EnKernel::Instance()->SetS63UserPermit(toEnString(userPermit), toEnString(mKey));
+        session.s63Configured = true;
+        replyOk(requestId, ",\"s63Configured\":true");
+        continue;
+      }
+      if (cmd == "openLibrary")
+      {
+        std::string path;
+        if (!extractString(line, "path", path))
+        {
+          replyErr(requestId, "missing path");
+          continue;
+        }
+        const QString qpath = QString::fromUtf8(path.c_str());
+        if (!QDir().mkpath(qpath))
+        {
+          replyErr(requestId, "library_mkdir_failed");
+          continue;
+        }
+        session.library = std::make_unique<Nautilus::DataRepository::EnChartLibrary>(toEnString(path));
+        session.libraryPath = path;
+        std::ostringstream body;
+        body << ",\"library\":\"" << jsonEscape(qpath.toStdWString()) << "\"";
+        replyOk(requestId, body.str());
+        continue;
+      }
+      if (cmd == "importPermits")
+      {
+        if (!session.library)
+        {
+          replyErr(requestId, "no_library");
+          continue;
+        }
+        std::string path;
+        if (!extractString(line, "path", path))
+        {
+          replyErr(requestId, "missing path");
+          continue;
+        }
+        session.library->ImportPermits(toEnString(path), nullptr);
+        std::ostringstream body;
+        body << ",\"permits\":\"" << jsonEscape(QString::fromUtf8(path.c_str()).toStdWString()) << "\"";
+        replyOk(requestId, body.str());
+        continue;
+      }
+      if (cmd == "importExchange")
+      {
+        if (!session.library)
+        {
+          replyErr(requestId, "no_library");
+          continue;
+        }
+        std::string path;
+        if (!extractString(line, "path", path))
+        {
+          replyErr(requestId, "missing path");
+          continue;
+        }
+        const std::string exchangeRoot = resolveExchangeRoot(path);
+        session.library->Import(toEnString(exchangeRoot), nullptr);
+        std::ostringstream body;
+        body << ",\"exchange\":\"" << jsonEscape(QString::fromUtf8(exchangeRoot.c_str()).toStdWString()) << "\"";
+        replyOk(requestId, body.str());
+        continue;
+      }
+      if (cmd == "listLibrary")
+      {
+        if (!session.library)
+        {
+          replyErr(requestId, "no_library");
+          continue;
+        }
+        const auto *cat = session.library->GetCatalog();
+        std::ostringstream body;
+        body << ",\"cells\":[";
+        bool first = true;
+        for (auto it = cat->Begin(); it != cat->End(); ++it)
+        {
+          if (!first)
+            body << ",";
+          first = false;
+          body << "{\"name\":\"" << toUtf8(it.GetName())
+               << "\",\"canLoad\":" << (it.CanLoadDataSet() ? "true" : "false") << "}";
+        }
+        body << "]";
+        replyOk(requestId, body.str());
+        continue;
+      }
+      if (cmd == "loadLibraryCell")
+      {
+        if (!session.library)
+        {
+          replyErr(requestId, "no_library");
+          continue;
+        }
+        std::string name;
+        if (!extractString(line, "name", name))
+        {
+          replyErr(requestId, "missing name");
+          continue;
+        }
+        int w = 1280, h = 720, d = 96;
+        extractInt(line, "width", w);
+        extractInt(line, "height", h);
+        extractInt(line, "dpi", d);
+
+        const auto its = session.library->GetCatalog()->FindDataSets(toEnString(name));
+        if (its.empty())
+        {
+          replyErr(requestId, "cell_not_found");
+          continue;
+        }
+        auto ds = session.library->LoadDataSet(its.front());
+        if (!ds)
+        {
+          replyErr(requestId, "cell_load_failed");
+          continue;
+        }
+
+        session.display = std::make_unique<Nautilus::Portrayal::EnChartDisplay>();
+        session.cairoBuffer.reset();
+        if (!session.ensureTarget(static_cast<unsigned>(w), static_cast<unsigned>(h), static_cast<unsigned>(d)))
+        {
+          replyErr(requestId, "target_create_failed");
+          continue;
+        }
+        session.display->AddDataSet(std::move(ds), 1);
+        session.applyDefaultSettings();
+        session.cellPath = name;
+        session.cellLoaded = true;
+        session.fitToCell();
+        std::ostringstream body;
+        body << ",\"cell\":\"" << jsonEscape(QString::fromUtf8(name.c_str()).toStdWString()) << "\""
+             << ",\"viewport\":{\"north\":" << session.north << ",\"south\":" << session.south
+             << ",\"west\":" << session.west << ",\"east\":" << session.east << "}";
         replyOk(requestId, body.str());
         continue;
       }

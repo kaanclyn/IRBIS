@@ -657,11 +657,6 @@ export function App() {
             onClose={() => setPanelOpen(false)}
             onNote={setStatusNote}
             onMapEngineChange={() => setChartReload((n) => n + 1)}
-            followOwn={followOwn}
-            onFollowChange={setFollowOwn}
-            onRoute={setCruiseRoute}
-            onSimRunningChange={setSimRunning}
-            initialTab="seyir"
           />
         ) : null}
       </div>

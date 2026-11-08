@@ -436,6 +436,23 @@ ipcMain.handle("irbis:nautilus-rescan", () => {
   return nautilus.rescan();
 });
 
+ipcMain.handle("irbis:nautilus-s63-status", () => {
+  if (!nautilus?.getS63Status) return { ready: false, error: "Nautilus yok" };
+  return nautilus.getS63Status();
+});
+
+ipcMain.handle("irbis:nautilus-s63-setup", async (_e, payload) => {
+  if (!nautilus?.setupS63) throw new Error("Nautilus S-63 API yok — renderer güncelle");
+  try {
+    const status = await nautilus.setupS63(payload || {});
+    broadcast("irbis:map-engine-changed", mapEngine?.get?.() ?? {});
+    broadcast("irbis:chart-changed", { engine: "nautilus", s63: true });
+    return { ok: true, ...status };
+  } catch (err) {
+    return { ok: false, error: String(err?.message || err), ...(nautilus.getS63Status?.() || {}) };
+  }
+});
+
 ipcMain.handle("irbis:get-chart-library", () => ensureChartLibrary().snapshot());
 
 ipcMain.handle("irbis:pick-enc-folder", async () => {
