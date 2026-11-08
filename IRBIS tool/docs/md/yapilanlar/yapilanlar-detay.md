@@ -100,7 +100,10 @@ requestRev stale guard (ilk tur).
 
 ## 11. Tek sütun şerit P0 ✅ kod 6 Kas ~01:15
 
-**Rapor:** `nautilus/11-tek-sutun-strip-p0.md`  
-- Kök: absolute `x*256` @ z18 (~4.5e7 px) → sütun yığılması (~215px şerit)  
-- Fix: göreli tile origin; coverageRequest/Layout/Enc; Debug+LAYOUT_AUDIT  
-- PNG’ler opak (şeffaf değil) · ChartViewer A/B bu turda yok · UI doğrulama kullanıcıda
+`nautilus/11-tek-sutun-strip-p0.md` (tile yolu; sonra askıya alındı)
+
+## 12. Tile askıda → full-frame C++ PNG ✅ 8 Kas
+
+- `NautilusViewport` → 317325e full-frame model (CSS pan/zoom + settle PNG)
+- `overscan: false` · `ensureTile` warn + askıda
+- Cache silindi · not: `nautilus/12-tile-askida-fullframe-png.md`

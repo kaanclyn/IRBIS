@@ -21,10 +21,9 @@
 | **P0** | Zoom request scheduler | ✅ |
 | **P0** | Anlık CSS zoom + overzoom | ✅ |
 | **P0** | LOD z17/18 + rematch snap | ✅ |
-| **P0** | Stale LOD + active/pending | ✅ kod · 🔥 UI |
-| **P0** | Tek sütun şerit (göreli origin) | ✅ kod · 🔥 UI z18 |
-| **P0** | Kabul: z18 mozaik + 10×10 wheel | 🔥 kullanıcı |
-| **P1** | Metatile 4×4 + S-52 etiket | ⏳ P0 geçince |
+| **P0** | Tile motoru | ⏸ **askıda** (8 Kas) — full-frame C++ PNG |
+| **P0** | Full-frame setViewport + CSS zoom | ✅ geri alındı |
+| **P1** | Tile/metatile yeniden | ⏳ full-frame stabil + onay |
 | **P1** | Progressive LOD (eski z kalsın) | |
 | **P1** | Projeksiyon / dikiş testleri | |
 | **P2** | Disk `{cell}/{z}/{x}/{y}` + prefetch | |

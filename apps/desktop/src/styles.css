@@ -4245,7 +4245,7 @@ html[data-ui="light"] .side-panel-bridge {
 
 .nautilus-layer {
   position: absolute;
-  /* inset yerine overscan width/left JS’ten — tampon alan CSS ile kayar */
+  inset: 0;
   transform-origin: center center;
   will-change: transform;
   backface-visibility: hidden;
@@ -4327,6 +4327,19 @@ html[data-ui="light"] .side-panel-bridge {
   object-fit: fill;
   image-rendering: auto;
   user-select: none;
+  pointer-events: none;
+}
+
+.nautilus-busy {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  z-index: 3;
+  font-size: 11px;
+  color: #cbd5e1;
+  background: rgba(2, 6, 23, 0.75);
+  padding: 4px 8px;
+  border-radius: 4px;
   pointer-events: none;
 }
 

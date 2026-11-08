@@ -967,11 +967,12 @@ function createNautilusBridge({ port = 18768 } = {}) {
   }
 
   /**
-   * 256×256 ENC karosu — equirectangular lon/lat bbox (Kernel ile uyumlu).
-   * Navionics disk düzeni referans: {z}/{x}/{y}.png @ 256.
-   * Metatile yok; S-52 kenar kesilmesi sonraki iterasyon.
+   * 256×256 tile API — ASKIDA (2026-11-08).
+   * UI tekrar full-frame C++ PNG (setViewport) yoluna alındı; tile çağrılmamalı.
+   * Kod silinmedi; metatile/zoom P0 sonrası yeniden açılabilir.
    */
   async function ensureTile(payload = {}) {
+    log.warn("nautilus ensureTile called while TILE ENGINE SUSPENDED — prefer setViewport full-frame PNG");
     const cellId = payload.cellId;
     const size = Math.max(64, Math.round(Number(payload.size) || TILE_SIZE));
     const dpi = Number(payload.dpi) || 96;
