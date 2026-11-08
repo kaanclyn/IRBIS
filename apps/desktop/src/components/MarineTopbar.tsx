@@ -174,6 +174,7 @@ export function MarineTopbar({
   onMinimize,
   onMaximizeToggle,
   onClose,
+  showWindowControls = true,
 }: {
   emblemUrl: string;
   depth: string;
@@ -192,6 +193,8 @@ export function MarineTopbar({
   onMinimize: () => void;
   onMaximizeToggle: () => void;
   onClose: () => void;
+  /** Hide Electron window chrome when running in a normal browser. */
+  showWindowControls?: boolean;
 }) {
   const heading =
     headingDeg != null && Number.isFinite(headingDeg)
@@ -219,35 +222,37 @@ export function MarineTopbar({
         <Metric label="İMLEÇ POS" coordinate={cursor ?? { lat: "—", lon: "—" }} />
       </section>
 
-      <nav className="window-controls" aria-label="Pencere kontrolleri">
-        <button className="window-button" type="button" title="Simge durumuna küçült" aria-label="Simge durumuna küçült" onClick={onMinimize}>
-          <svg viewBox="0 0 20 20">
-            <path d="M4 10h12" />
-          </svg>
-        </button>
-        <button
-          className="window-button"
-          type="button"
-          title={maximized ? "Geri yükle" : "Ekranı kapla"}
-          aria-label={maximized ? "Geri yükle" : "Ekranı kapla"}
-          onClick={onMaximizeToggle}
-        >
-          {maximized ? (
+      {showWindowControls ? (
+        <nav className="window-controls" aria-label="Pencere kontrolleri">
+          <button className="window-button" type="button" title="Simge durumuna küçült" aria-label="Simge durumuna küçült" onClick={onMinimize}>
             <svg viewBox="0 0 20 20">
-              <path d="M6 8h8v8H6zM8 6h8v8" fill="none" />
+              <path d="M4 10h12" />
             </svg>
-          ) : (
+          </button>
+          <button
+            className="window-button"
+            type="button"
+            title={maximized ? "Geri yükle" : "Ekranı kapla"}
+            aria-label={maximized ? "Geri yükle" : "Ekranı kapla"}
+            onClick={onMaximizeToggle}
+          >
+            {maximized ? (
+              <svg viewBox="0 0 20 20">
+                <path d="M6 8h8v8H6zM8 6h8v8" fill="none" />
+              </svg>
+            ) : (
+              <svg viewBox="0 0 20 20">
+                <rect x="4" y="4" width="12" height="12" rx="1.1" />
+              </svg>
+            )}
+          </button>
+          <button className="window-button close" type="button" title="Kapat" aria-label="Kapat" onClick={onClose}>
             <svg viewBox="0 0 20 20">
-              <rect x="4" y="4" width="12" height="12" rx="1.1" />
+              <path d="M5 5l10 10M15 5L5 15" />
             </svg>
-          )}
-        </button>
-        <button className="window-button close" type="button" title="Kapat" aria-label="Kapat" onClick={onClose}>
-          <svg viewBox="0 0 20 20">
-            <path d="M5 5l10 10M15 5L5 15" />
-          </svg>
-        </button>
-      </nav>
+          </button>
+        </nav>
+      ) : null}
     </header>
   );
 }

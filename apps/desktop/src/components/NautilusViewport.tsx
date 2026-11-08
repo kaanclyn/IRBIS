@@ -7,6 +7,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import type { AisTarget } from "../hooks/useAis";
+import { nautilusPick, nautilusSetViewport } from "../runtime/bridge";
 
 type GeoBBox = { north: number; south: number; west: number; east: number };
 
@@ -193,7 +194,6 @@ export function NautilusViewport({
 
   const redraw = useCallback(
     async (opts: { action: "fit" | "set"; bbox?: GeoBBox | null; reason?: "user" | "follow" | "center" }) => {
-      if (!window.irbis?.nautilusSetViewport) throw new Error("Nautilus API yok");
       const seq = ++loadSeq.current;
       const genAtStart = gestureGen.current;
       const camAtStart = { ...camRef.current };
@@ -220,7 +220,7 @@ export function NautilusViewport({
                 east: opts.bbox?.east,
                 overscan: false as const,
               };
-        const r = (await window.irbis.nautilusSetViewport(payload)) as RenderInfo;
+        const r = (await nautilusSetViewport(payload)) as RenderInfo;
         if (seq !== loadSeq.current) return;
         // Kullanici jesti: iptal + yeniden settle. Follow/center: cam drift yutma.
         if (!followLike && genAtStart !== gestureGen.current) {
@@ -430,9 +430,9 @@ export function NautilusViewport({
     }
     const pt = screenToPngPx(e.clientX, e.clientY);
     const inf = infoRef.current;
-    if (!pt || !baseVpRef.current || !inf || !window.irbis?.nautilusPick) return;
+    if (!pt || !baseVpRef.current || !inf) return;
     try {
-      const hit = (await window.irbis.nautilusPick({
+      const hit = (await nautilusPick({
         cellId: cellId || undefined,
         width: inf.width,
         height: inf.height,

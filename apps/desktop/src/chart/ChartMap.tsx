@@ -9,6 +9,7 @@ import {
   WORLD_PALETTES,
   fetchSchemeStyle,
 } from "./scheme";
+import { resolveChartConfig } from "../runtime/bridge";
 
 export interface ChartConfig {
   baseUrl: string;
@@ -183,13 +184,29 @@ async function buildStyle(cfg: ChartConfig, scheme: ChartScheme): Promise<{
   style: StyleSpecification;
   styleMeta: { path: string; remapped: boolean };
 }> {
-  const { style: raw, path, remapped } = await fetchSchemeStyle(
-    cfg.baseUrl,
-    scheme,
-    cfg.stylePath || "style.json",
-  );
-  const style = raw as StyleSpecification;
-
+  let style: StyleSpecification;
+  let path = "inline";
+  let remapped = false;
+  const useNavionicsEarly = cfg.mapMode === "navionics" && !!cfg.navionics?.tileUrl;
+  if (useNavionicsEarly && (!cfg.baseUrl || cfg.mode === "web-preview")) {
+    // Web / Navionics-only: no tile57 style.json required.
+    style = { version: 8, name: `irbis-navionics-${scheme}`, sources: {}, layers: [] };
+  } else {
+    try {
+      const fetched = await fetchSchemeStyle(
+        cfg.baseUrl,
+        scheme,
+        cfg.stylePath || "style.json",
+      );
+      style = fetched.style as StyleSpecification;
+      path = fetched.path;
+      remapped = fetched.remapped;
+    } catch (err) {
+      if (!useNavionicsEarly) throw err;
+      style = { version: 8, name: `irbis-navionics-${scheme}`, sources: {}, layers: [] };
+      path = "inline-fallback";
+    }
+  }
   // Empty readyCells = world basemap only (S-63 / no bake). Do not invent a fake NOAA quilt.
   const ready =
     cfg.readyCells && cfg.readyCells.length > 0
@@ -721,8 +738,7 @@ export function ChartMap({
       try {
         ensureMaplibreWorker();
         ensurePmtilesProtocol();
-        const cfg = (await window.irbis?.getChartConfig()) as ChartConfig | undefined;
-        if (!cfg) throw new Error("Chart config IPC yok (Electron preload)");
+        const cfg = await resolveChartConfig();
         if (cancelled || !containerRef.current) return;
         cfgRef.current = cfg;
 

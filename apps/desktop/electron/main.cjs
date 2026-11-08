@@ -10,6 +10,7 @@ const { createCameraStreamProxy } = require("./cameraStreamProxy.cjs");
 const { createOnvifService } = require("./onvifService.cjs");
 const { createNautilusBridge } = require("./nautilusBridge.cjs");
 const { createMapEngineStore } = require("./mapEngineStore.cjs");
+const { createWebBridgeServer } = require("./webBridgeServer.cjs");
 const { log } = require("./log.cjs");
 
 /** @type {BrowserWindow | null} */
@@ -32,6 +33,8 @@ let onvif = null;
 let nautilus = null;
 /** @type {ReturnType<typeof createMapEngineStore> | null} */
 let mapEngine = null;
+/** @type {ReturnType<typeof createWebBridgeServer> | null} */
+let webBridge = null;
 
 function ensureChartLibrary() {
   if (!chartLib) chartLib = createChartLibrary();
@@ -41,6 +44,11 @@ function ensureChartLibrary() {
 function broadcast(channel, payload) {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send(channel, payload);
+  }
+  try {
+    webBridge?.publish?.(channel, payload);
+  } catch {
+    /* ignore */
   }
 }
 
@@ -213,6 +221,42 @@ app.whenReady().then(async () => {
     nautilus = null;
   }
 
+  try {
+    webBridge = createWebBridgeServer({
+      port: Number(process.env.IRBIS_WEB_BRIDGE_PORT || 18769),
+      getOwnShip: () => nmea?.getState() ?? null,
+      getAis: () => nmea?.getAis() ?? { targets: [], count: 0 },
+      getMapCatalog: () => buildMapCatalog(),
+      setMapEngine: (engine) => {
+        const state = mapEngine?.setEngine(String(engine || "navionics"));
+        broadcast("irbis:map-engine-changed", state);
+        broadcast("irbis:chart-changed", { engine: state?.engine });
+        return state;
+      },
+      setNautilusCell: (cellId) => {
+        const state = mapEngine?.setNautilusCell(String(cellId || ""));
+        broadcast("irbis:map-engine-changed", state);
+        broadcast("irbis:chart-changed", { engine: "nautilus", cellId });
+        return state;
+      },
+      nautilusRescan: () => nautilus?.rescan?.() ?? [],
+      nautilusSetViewport: async (payload) => {
+        if (!nautilus) throw new Error("Nautilus bridge yok");
+        const cellId = payload?.cellId || mapEngine?.get()?.nautilusCellId;
+        return nautilus.setViewport({ ...payload, cellId });
+      },
+      nautilusPick: async (payload) => {
+        if (!nautilus) throw new Error("Nautilus bridge yok");
+        const cellId = payload?.cellId || mapEngine?.get()?.nautilusCellId;
+        return nautilus.pickFeature({ ...payload, cellId });
+      },
+    });
+    webBridge.start();
+  } catch (err) {
+    log.error("web bridge failed", err);
+    webBridge = null;
+  }
+
   createWindow();
 
   app.on("activate", () => {
@@ -221,6 +265,12 @@ app.whenReady().then(async () => {
 });
 
 app.on("window-all-closed", () => {
+  try {
+    webBridge?.stop?.();
+  } catch {
+    /* ignore */
+  }
+  webBridge = null;
   nmea?.stop();
   nmea = null;
   try {
@@ -346,7 +396,7 @@ ipcMain.handle("irbis:get-chart-config", async () => {
   };
 });
 
-ipcMain.handle("irbis:get-map-catalog", () => {
+function buildMapCatalog() {
   const prefs = mapEngine?.get?.() ?? { engine: "navionics", nautilusCellId: null };
   const navOk = !!(navionics?.running && navionics.tileUrlTemplate);
   return {
@@ -376,7 +426,9 @@ ipcMain.handle("irbis:get-map-catalog", () => {
       ? { cacheDir: navionics.cacheDir, cache: navionics.cache, offlineOnly: navionics.offlineOnly }
       : null,
   };
-});
+}
+
+ipcMain.handle("irbis:get-map-catalog", () => buildMapCatalog());
 
 ipcMain.handle("irbis:set-map-engine", (_e, engine) => {
   const state = mapEngine?.setEngine(String(engine || "navionics"));

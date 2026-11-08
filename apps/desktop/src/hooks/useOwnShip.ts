@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { channelAgeMs, STALE_MS, type OwnShipState } from "@irbis/connect";
+import { subscribeLiveNav } from "../runtime/bridge";
 
 export type DisplayMetric = {
   value: string;
@@ -17,16 +18,11 @@ export function useOwnShip() {
   const [state, setState] = useState<OwnShipState | null>(null);
 
   useEffect(() => {
-    let unsub: (() => void) | undefined;
-    if (window.irbis?.onOwnShip) {
-      unsub = window.irbis.onOwnShip((payload) => {
-        setState(payload as OwnShipState);
-      });
-    }
-    void window.irbis?.getOwnShip?.().then((s) => {
-      if (s) setState(s as OwnShipState);
+    return subscribeLiveNav({
+      onOwnShip: (payload) => {
+        if (payload) setState(payload as OwnShipState);
+      },
     });
-    return () => unsub?.();
   }, []);
 
   const now = Date.now();

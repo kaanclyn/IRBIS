@@ -3,6 +3,12 @@ import type { useCameras } from "../hooks/useCameras";
 import type { CamLayout, CamLayoutState, CamSlot } from "../camera/cameraLayout";
 import { CAM_DRAG_MIME } from "../camera/cameraLayout";
 import { CamDragChip } from "./CameraWall";
+import {
+  getMapCatalog,
+  nautilusRescan,
+  setMapEngine,
+  setNautilusCell,
+} from "../runtime/bridge";
 
 export type SettingsTab = "seyir" | "kamera" | "radar" | "genel";
 type MapEngine = "navionics" | "nautilus";
@@ -53,7 +59,9 @@ export function SettingsPanel({
   const [mapBusy, setMapBusy] = useState(false);
 
   const refreshCatalog = () => {
-    void window.irbis?.getMapCatalog?.().then((c) => setMapCatalog(c)).catch(() => setMapCatalog(null));
+    void getMapCatalog()
+      .then((c) => setMapCatalog(c as typeof mapCatalog))
+      .catch(() => setMapCatalog(null));
   };
 
   useEffect(() => {
@@ -62,8 +70,7 @@ export function SettingsPanel({
 
   const pickEngine = (engine: MapEngine) => {
     setMapBusy(true);
-    void window.irbis
-      ?.setMapEngine?.(engine)
+    void setMapEngine(engine)
       .then(() => {
         onNote(engine === "nautilus" ? "Harita · Nautilus ENC" : "Harita · Navionics");
         refreshCatalog();
@@ -75,9 +82,8 @@ export function SettingsPanel({
 
   const pickCell = (cellId: string) => {
     setMapBusy(true);
-    void window.irbis
-      ?.setNautilusCell?.(cellId)
-      .then(() => window.irbis?.setMapEngine?.("nautilus"))
+    void setNautilusCell(cellId)
+      .then(() => setMapEngine("nautilus"))
       .then(() => {
         onNote(`Nautilus hücre · ${cellId}`);
         refreshCatalog();
@@ -217,8 +223,7 @@ export function SettingsPanel({
                 disabled={mapBusy}
                 onClick={() => {
                   setMapBusy(true);
-                  void window.irbis
-                    ?.nautilusRescan?.()
+                  void nautilusRescan()
                     .then(() => {
                       refreshCatalog();
                       onNote("Nautilus hücreler tarandı");

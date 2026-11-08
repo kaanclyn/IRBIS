@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { subscribeLiveNav } from "../runtime/bridge";
 
 export interface AisTarget {
   mmsi: number;
@@ -20,18 +21,12 @@ export function useAis() {
   const [targets, setTargets] = useState<AisTarget[]>([]);
 
   useEffect(() => {
-    let unsub: (() => void) | undefined;
-    if (window.irbis?.onAis) {
-      unsub = window.irbis.onAis((payload) => {
+    return subscribeLiveNav({
+      onAis: (payload) => {
         const p = payload as { targets?: AisTarget[] };
-        setTargets(p.targets ?? []);
-      });
-    }
-    void window.irbis?.getAis?.().then((s) => {
-      const p = s as { targets?: AisTarget[] };
-      if (p?.targets) setTargets(p.targets);
+        setTargets(p?.targets ?? []);
+      },
     });
-    return () => unsub?.();
   }, []);
 
   return { targets, count: targets.length };

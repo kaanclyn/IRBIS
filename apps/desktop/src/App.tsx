@@ -13,6 +13,7 @@ import { CameraWall } from "./components/CameraWall";
 import { NautilusViewport } from "./components/NautilusViewport";
 import { PtzPad, type PtzDir } from "./components/PtzPad";
 import { loadCamLayout, saveCamLayout, type CamLayoutState } from "./camera/cameraLayout";
+import { getMapCatalog, hasElectronBridge, subscribeLiveNav } from "./runtime/bridge";
 
 function formatCoord(lat: number, lon: number): string {
   const p = formatCoordParts(lat, lon);
@@ -81,6 +82,7 @@ export function App() {
   const [pointer, setPointer] = useState<{ lat: number; lon: number } | null>(null);
   const [now, setNow] = useState(() => new Date());
   const [chartReload, setChartReload] = useState(0);
+  const electronBridge = hasElectronBridge();
   const [mapEngine, setMapEngine] = useState<"navionics" | "nautilus">("navionics");
   const [nautilusCellId, setNautilusCellId] = useState<string | null>(null);
   const [maximized, setMaximized] = useState(false);
@@ -175,19 +177,33 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    const syncEngine = () => {
-      void window.irbis?.getMapCatalog?.().then((c) => {
-        setMapEngine(c.engine === "nautilus" ? "nautilus" : "navionics");
-        setNautilusCellId(c.nautilusCellId ?? c.nautilusCells?.[0]?.id ?? null);
-      });
+    document.documentElement.classList.toggle("runtime-web", !electronBridge);
+  }, [electronBridge]);
+
+  useEffect(() => {
+    const applyCatalog = (c: {
+      engine?: string;
+      nautilusCellId?: string | null;
+      nautilusCells?: Array<{ id: string }>;
+    } | null) => {
+      if (!c) return;
+      setMapEngine(c.engine === "nautilus" ? "nautilus" : "navionics");
+      setNautilusCellId(c.nautilusCellId ?? c.nautilusCells?.[0]?.id ?? null);
     };
-    syncEngine();
-    const unsub = window.irbis?.onMapEngineChanged?.(() => {
-      syncEngine();
-      setChartReload((n) => n + 1);
+
+    void getMapCatalog()
+      .then((c) => applyCatalog(c as Parameters<typeof applyCatalog>[0]))
+      .catch(() => {
+        if (!electronBridge) setMapEngine("navionics");
+      });
+
+    return subscribeLiveNav({
+      onMap: (payload) => {
+        applyCatalog(payload as Parameters<typeof applyCatalog>[0]);
+        setChartReload((n) => n + 1);
+      },
     });
-    return () => unsub?.();
-  }, []);
+  }, [electronBridge]);
 
   useEffect(() => {
     const id = window.setTimeout(() => window.dispatchEvent(new Event("resize")), 40);
@@ -400,6 +416,7 @@ export function App() {
         onMinimize={() => void window.irbis?.windowMinimize?.()}
         onMaximizeToggle={() => void window.irbis?.windowMaximizeToggle?.().then((s) => setMaximized(!!s?.maximized))}
         onClose={() => void window.irbis?.windowClose?.()}
+        showWindowControls={electronBridge}
       />
 
       <div className="workspace">

@@ -17,6 +17,27 @@ export default defineConfig({
     host: "127.0.0.1",
     port: 5173,
     strictPort: true,
+    // Browser preview (Chrome at :5173) while Electron also runs tile/chart servers.
+    proxy: {
+      "/navionics": {
+        target: "http://127.0.0.1:18765",
+        changeOrigin: true,
+      },
+      "/sonar": {
+        target: "http://127.0.0.1:18765",
+        changeOrigin: true,
+      },
+      "/chart-bake": {
+        target: "http://127.0.0.1:17357",
+        changeOrigin: true,
+        rewrite: (p) => p.replace(/^\/chart-bake/, ""),
+      },
+      // NMEA / AIS live bridge (Electron webBridgeServer)
+      "/api": {
+        target: "http://127.0.0.1:18769",
+        changeOrigin: true,
+      },
+    },
   },
   build: {
     outDir: "dist",
